@@ -7,14 +7,14 @@ import (
 )
 
 func TestQueryCountURL(t *testing.T) {
-	got := buildQueryURL("http://localhost:8080", map[string]string{"project": "alpha", "logid": "x"})
-	want := "http://localhost:8080/query?logid=x&project=alpha"
+	got := buildQueryURL("http://localhost:4665", map[string]string{"project": "alpha", "logid": "x"})
+	want := "http://localhost:4665/query?logid=x&project=alpha"
 	if got != want {
 		t.Errorf("URL = %q, want %q", got, want)
 	}
 
-	got = buildQueryURL("http://localhost:8080", map[string]string{})
-	want = "http://localhost:8080/query?project=billing-service"
+	got = buildQueryURL("http://localhost:4665", map[string]string{})
+	want = "http://localhost:4665/query?project=billing-service"
 	if got != want {
 		t.Errorf("URL empty = %q, want %q", got, want)
 	}

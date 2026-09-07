@@ -4,7 +4,7 @@
 #
 # Ports exposed on the host:
 #   9092  Kafka (PLAINTEXT, for SDKs / external producers)
-#   8080  Collector HTTP query API
+#   4665  Collector HTTP query API (mapped to container port 8080)
 #
 # Persistence:
 #   - Kafka broker state lives on the host under `KAFKA_DATA_DIR`
@@ -60,7 +60,7 @@ services:
       kafka:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "4665:8080"
     environment:
       KAFKA_BROKERS: "kafka:9092"
       KAFKA_TOPIC: "logs"

@@ -26,7 +26,7 @@ import (
 func main() {
 	var (
 		brokers = flag.String("brokers", "localhost:9092", "Kafka bootstrap address")
-		apiURL  = flag.String("api", "http://localhost:8080", "Collector HTTP base URL")
+		apiURL  = flag.String("api", "http://localhost:4665", "Collector HTTP base URL")
 		topic   = flag.String("topic", "logs", "Kafka topic")
 		nEvents = flag.Int("events", 1000, "Number of events to produce")
 		timeout = flag.Duration("timeout", 60*time.Second, "How long to wait for the collector to drain")

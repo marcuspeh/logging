@@ -39,7 +39,7 @@ docker compose logs -f collector
 The compose stack brings up:
 
 - `logging-kafka` — KRaft single-node Kafka broker on `:9092`.
-- `logging-collector` — the Go consumer + HTTP API on `:8080`.
+- `logging-collector` — the Go consumer + HTTP API on `:4665`.
 
 Parquet files are written to the host directory mounted into the
 container (see `backend/docker-compose.yml`).
@@ -81,16 +81,16 @@ See [`sdk/python/README.md`](./sdk/python/README.md) for the full API.
 
 ```bash
 # Health check
-curl localhost:8080/healthz
+curl localhost:4665/healthz
 
 # Filter by correlation id
-curl 'localhost:8080/query?logid=req-7f2c&limit=10'
+curl 'localhost:4665/query?logid=req-7f2c&limit=10'
 
 # Filter by project + time range
-curl 'localhost:8080/query?project=billing-service&from=2026-09-06T00:00:00Z&limit=50'
+curl 'localhost:4665/query?project=billing-service&from=2026-09-06T00:00:00Z&limit=50'
 
 # List parquet files (debug)
-curl localhost:8080/files
+curl localhost:4665/files
 ```
 
 Response shape:
