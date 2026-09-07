@@ -56,7 +56,6 @@ type Writer struct {
 
 	// accumulator state for the in-flight file
 	rowCount int64
-	started  time.Time
 	minTs    time.Time
 	maxTs    time.Time
 	projects map[string]struct{}
@@ -161,7 +160,6 @@ func (w *Writer) openNewFile() error {
 	w.currentPath = path
 	w.currentSize = 0
 	w.rowCount = 0
-	w.started = now
 	w.minTs = time.Time{}
 	w.maxTs = time.Time{}
 	// projects is intentionally not reset; it accumulates until closeLocked.
@@ -197,7 +195,7 @@ func (w *Writer) closeLocked() error {
 
 	idx := Index{
 		File:      filepath.Base(w.currentPath),
-		Started:   w.started,
+		Started:   w.minTs,
 		Ended:     w.maxTs,
 		RowCount:  w.rowCount,
 		Projects:  sortedKeys(w.projects),

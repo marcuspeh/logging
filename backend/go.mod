@@ -3,6 +3,7 @@ module github.com/marcuspeh/logging-backend
 go 1.24.9
 
 require (
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/segmentio/kafka-go v0.4.51
 )
