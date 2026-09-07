@@ -21,16 +21,11 @@ import (
 )
 
 const (
-	// filePrefix is the name prefix for rotated Parquet files.
 	filePrefix = "logs-"
-
-	// idxSuffix is appended to the Parquet file basename to form the
-	// sidecar index filename (e.g. logs-123-0001.parquet.idx.json).
-	idxSuffix = ".idx.json"
+	idxSuffix  = ".idx.json"
 )
 
-// Index is the JSON sidecar manifest written next to each Parquet file. The
-// query API uses it to decide which files are worth scanning.
+// Index is the JSON sidecar manifest written next to each Parquet file.
 type Index struct {
 	File      string    `json:"file"`
 	Started   time.Time `json:"started"`
@@ -42,8 +37,7 @@ type Index struct {
 
 // Writer appends LogEvents to a rotating Parquet file.
 //
-// Writer is safe for concurrent use; the underlying parquet writer is
-// guarded by a mutex.
+// Safe for concurrent use; the underlying parquet writer is guarded by a mutex.
 type Writer struct {
 	dir         string
 	rotateBytes int64
@@ -52,9 +46,8 @@ type Writer struct {
 	out         *parquet.GenericWriter[model.LogEvent]
 	file        *os.File
 	currentPath string
-	currentSize int64 // approximate uncompressed bytes accumulated
+	currentSize int64
 
-	// accumulator state for the in-flight file
 	rowCount int64
 	minTs    time.Time
 	maxTs    time.Time
@@ -87,8 +80,7 @@ func New(dir string, rotateBytes int64) (*Writer, error) {
 }
 
 // Write appends a single LogEvent. If the resulting file would exceed
-// rotateBytes, the current file is sealed and a new one is opened
-// transparently.
+// rotateBytes, the current file is sealed and a new one is opened.
 func (w *Writer) Write(ev model.LogEvent) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -97,7 +89,6 @@ func (w *Writer) Write(ev model.LogEvent) error {
 		return fmt.Errorf("parquet: write row: %w", err)
 	}
 
-	// Approximate uncompressed size using the row's projected byte cost.
 	w.currentSize += approxRowBytes(ev)
 	w.rowCount++
 
@@ -120,8 +111,8 @@ func (w *Writer) Write(ev model.LogEvent) error {
 	return nil
 }
 
-// Rotate seals the current file (flush + close + write sidecar) and opens a
-// new one. Safe to call concurrently.
+// Rotate seals the current file (flush + close + write sidecar) and opens
+// a new one. Safe to call concurrently.
 func (w *Writer) Rotate() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -138,8 +129,8 @@ func (w *Writer) Close() error {
 // Dir returns the directory the writer writes into.
 func (w *Writer) Dir() string { return w.dir }
 
-// openNewFile (caller holds w.mu) creates a fresh file + writer and resets
-// per-file accumulators.
+// openNewFile creates a fresh file + writer and resets per-file
+// accumulators. Caller must hold w.mu.
 func (w *Writer) openNewFile() error {
 	now := time.Now().UTC()
 	name := fmt.Sprintf("%s%d-%04d.parquet", filePrefix, now.Unix(), w.seq)
@@ -162,7 +153,6 @@ func (w *Writer) openNewFile() error {
 	w.rowCount = 0
 	w.minTs = time.Time{}
 	w.maxTs = time.Time{}
-	// projects is intentionally not reset; it accumulates until closeLocked.
 	w.projects = make(map[string]struct{})
 	w.seq++
 	return nil
@@ -219,7 +209,7 @@ func writeIndex(parquetPath string, idx Index) error {
 		return fmt.Errorf("parquet: create index tmp: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op if rename succeeded
+	defer os.Remove(tmpName)
 
 	enc := json.NewEncoder(tmp)
 	enc.SetIndent("", "  ")
@@ -240,8 +230,6 @@ func writeIndex(parquetPath string, idx Index) error {
 	return nil
 }
 
-// fileSize returns the on-disk size of path, or 0 if the file cannot be
-// stat'd (e.g. already removed).
 func fileSize(path string) int64 {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -250,7 +238,6 @@ func fileSize(path string) int64 {
 	return st.Size()
 }
 
-// sortedKeys returns the keys of m in sorted order.
 func sortedKeys(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -260,14 +247,14 @@ func sortedKeys(m map[string]struct{}) []string {
 	return out
 }
 
-// approxRowBytes estimates the uncompressed size of a row. We don't have a
-// streaming byte counter from parquet-go, so this is a deliberately rough
-// heuristic based on the string column widths plus the timestamp. It's used
-// only to decide when to rotate; actual on-disk sizes are tracked in the
-// sidecar via fileSize().
+// approxRowBytes estimates the uncompressed size of a row. parquet-go
+// doesn't expose a streaming byte counter, so we use a heuristic based on
+// the string column widths plus the timestamp. It's used only to decide
+// when to rotate; actual on-disk sizes are tracked in the sidecar via
+// fileSize().
 func approxRowBytes(ev model.LogEvent) int64 {
 	var n int64
-	n += 16 // timestamp microsecond struct overhead
+	n += 16
 	n += int64(len(ev.Project))
 	n += int64(len(ev.LogID))
 	n += int64(len(ev.Level))

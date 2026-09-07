@@ -1,7 +1,7 @@
 // Package config loads service settings from the environment.
 //
-// All values are read once via Load(). Defaults are chosen to match the
-// docker-compose service in PLAN §9.
+// All values are read once via Load(). Defaults match the docker-compose
+// service defined in PLAN §9.
 package config
 
 import (
@@ -15,27 +15,13 @@ import (
 
 // Config holds the runtime configuration for the logging-backend service.
 type Config struct {
-	// KafkaBrokers is a comma-separated list of bootstrap servers.
-	KafkaBrokers []string
-
-	// KafkaTopic is the source topic to consume from.
-	KafkaTopic string
-
-	// KafkaGroupID is the consumer group used by the collector.
-	KafkaGroupID string
-
-	// ParquetDir is the directory where rotated Parquet files are written.
-	ParquetDir string
-
-	// ParquetRotateBytes is the uncompressed byte threshold that triggers a
-	// file rotation. Defaults to 128 MiB.
+	KafkaBrokers       []string
+	KafkaTopic         string
+	KafkaGroupID       string
+	ParquetDir         string
 	ParquetRotateBytes int64
-
-	// HTTPAddr is the address the query API listens on.
-	HTTPAddr string
-
-	// ShutdownTimeout is how long graceful shutdown is allowed to take.
-	ShutdownTimeout time.Duration
+	HTTPAddr           string
+	ShutdownTimeout    time.Duration
 }
 
 // Defaults returns the default configuration used when no env overrides are
@@ -55,8 +41,8 @@ func Defaults() Config {
 // Load reads configuration from the process environment, falling back to
 // Defaults() for any value that is not set or is empty.
 //
-// Returns an error if a value is present but malformed (e.g. non-integer
-// PARQUET_ROTATE_BYTES) or if a required value is missing.
+// Returns an error if a value is present but malformed or if a required
+// value is missing.
 func Load() (Config, error) {
 	cfg := Defaults()
 
@@ -67,19 +53,15 @@ func Load() (Config, error) {
 		}
 		cfg.KafkaBrokers = brokers
 	}
-
 	if v := os.Getenv("KAFKA_TOPIC"); v != "" {
 		cfg.KafkaTopic = v
 	}
-
 	if v := os.Getenv("KAFKA_GROUP_ID"); v != "" {
 		cfg.KafkaGroupID = v
 	}
-
 	if v := os.Getenv("PARQUET_DIR"); v != "" {
 		cfg.ParquetDir = v
 	}
-
 	if v := os.Getenv("PARQUET_ROTATE_BYTES"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -90,11 +72,9 @@ func Load() (Config, error) {
 		}
 		cfg.ParquetRotateBytes = n
 	}
-
 	if v := os.Getenv("HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
 	}
-
 	if v := os.Getenv("SHUTDOWN_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -105,12 +85,9 @@ func Load() (Config, error) {
 		}
 		cfg.ShutdownTimeout = d
 	}
-
 	return cfg, nil
 }
 
-// splitCSV splits on commas and trims surrounding whitespace from each entry,
-// dropping empties.
 func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
 	out := parts[:0]

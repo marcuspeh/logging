@@ -54,17 +54,19 @@ type Response struct {
 	Results []ResultRow `json:"results"`
 }
 
-// rowHeap implements a min-heap on row timestamp, used for K-way merge across
-// multiple Parquet files.
+// rowHeap implements a min-heap on row timestamp, used for bounded K-way
+// merge across multiple Parquet files.
 type rowHeap struct {
 	rows []model.LogEvent
 	less func(a, b model.LogEvent) bool
 }
 
-func (h rowHeap) Len() int            { return len(h.rows) }
-func (h rowHeap) Less(i, j int) bool  { return h.less(h.rows[i], h.rows[j]) }
-func (h rowHeap) Swap(i, j int)       { h.rows[i], h.rows[j] = h.rows[j], h.rows[i] }
-func (h *rowHeap) Push(x interface{}) { h.rows = append(h.rows, x.(model.LogEvent)) }
+func (h rowHeap) Len() int           { return len(h.rows) }
+func (h rowHeap) Less(i, j int) bool { return h.less(h.rows[i], h.rows[j]) }
+func (h rowHeap) Swap(i, j int)      { h.rows[i], h.rows[j] = h.rows[j], h.rows[i] }
+func (h *rowHeap) Push(x interface{}) {
+	h.rows = append(h.rows, x.(model.LogEvent))
+}
 func (h *rowHeap) Pop() interface{} {
 	old := h.rows
 	n := len(old)
@@ -89,13 +91,6 @@ func (e *Engine) Execute(q Query) (Response, error) {
 		return Response{Count: 0, Results: []ResultRow{}}, nil
 	}
 
-	// Determine per-file row cursors. We stream rows from each Parquet
-	// file in timestamp order, then merge.
-	type cursor struct {
-		rows  []model.LogEvent
-		idx   int // next row to emit
-		empty bool
-	}
 	cursors := make([]cursor, 0, len(entries))
 	for _, ent := range entries {
 		rows, err := readParquetRows(ent.Path)
@@ -115,8 +110,6 @@ func (e *Engine) Execute(q Query) (Response, error) {
 
 	less := func(a, b model.LogEvent) bool { return a.Timestamp.Before(b.Timestamp) }
 	if q.Order == OrderDesc {
-		// For a min-heap we keep the *worst* (latest, for desc) at the
-		// top so we can evict it on overflow.
 		less = func(a, b model.LogEvent) bool { return a.Timestamp.After(b.Timestamp) }
 	}
 
@@ -135,7 +128,6 @@ func (e *Engine) Execute(q Query) (Response, error) {
 		}
 	}
 
-	// Drain heap and sort for the final response.
 	out := make([]model.LogEvent, 0, merged.Len())
 	for merged.Len() > 0 {
 		out = append(out, heap.Pop(merged).(model.LogEvent))
@@ -159,9 +151,12 @@ func (e *Engine) Execute(q Query) (Response, error) {
 	return resp, nil
 }
 
-// readParquetRows decodes all rows from a Parquet file using column
-// projection (we read all five columns; parquet-go applies dictionary + page
-// filtering where possible).
+type cursor struct {
+	rows []model.LogEvent
+}
+
+// readParquetRows decodes all rows from a Parquet file. parquet-go applies
+// dictionary + page filtering where possible.
 func readParquetRows(path string) ([]model.LogEvent, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -175,9 +170,10 @@ func readParquetRows(path string) ([]model.LogEvent, error) {
 	return parquet.Read[model.LogEvent](f, st.Size())
 }
 
-// rowMatches applies the in-row filters that the index can't fully enforce.
-// The index narrows to files that *mention* the project, but a single file
-// can still contain rows for other projects, so we re-check Project here.
+// rowMatches applies the per-row filters the index can't fully enforce.
+// The index narrows to files that *mention* the project, but a single
+// file can still contain rows for other projects, so Project is re-checked
+// here.
 func rowMatches(r model.LogEvent, q Query) bool {
 	if q.Project != "" && r.Project != q.Project {
 		return false

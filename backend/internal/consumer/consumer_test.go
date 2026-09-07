@@ -2,7 +2,6 @@ package consumer
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/marcuspeh/logging-backend/internal/model"
 )
 
-// silentLogger discards output for test runs.
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 }
@@ -113,9 +111,6 @@ func TestStatsZero(t *testing.T) {
 	}
 }
 
-// fakeSink is a no-op Sink that counts how many writes happened. Useful
-// for the New() validation tests; the Run() integration is exercised
-// against a real Kafka broker in the smoke test (Task 8).
 type fakeSink struct {
 	written int
 }
@@ -123,6 +118,5 @@ type fakeSink struct {
 func (f fakeSink) Write(ev model.LogEvent) error {
 	f.written++
 	_ = ev
-	_ = context.TODO()
 	return nil
 }

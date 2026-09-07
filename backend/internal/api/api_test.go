@@ -14,7 +14,6 @@ import (
 	"github.com/marcuspeh/logging-backend/internal/parquet"
 )
 
-// helper: write n events through a parquet.Writer into dir, return its path.
 func writeFixture(t *testing.T, dir string, events []model.LogEvent, rotateBytes int64) {
 	t.Helper()
 	w, err := parquet.New(dir, rotateBytes)
@@ -85,7 +84,6 @@ func TestIndexLoaderFiltersByTime(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// File in January.
 	writeFixture(t, dir, []model.LogEvent{
 		makeEvent(base, "p", "x", "INFO", "jan"),
 	}, 1<<20)
@@ -96,7 +94,6 @@ func TestIndexLoaderFiltersByTime(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(all))
 	}
 
-	// Query window entirely after the file → should be skipped.
 	q := Query{
 		Project: "p",
 		From:    base.Add(30 * 24 * time.Hour),
@@ -106,7 +103,6 @@ func TestIndexLoaderFiltersByTime(t *testing.T) {
 		t.Errorf("expected 0 entries for time window after file, got %d", len(got))
 	}
 
-	// Query window that overlaps the file → should match.
 	q = Query{Project: "p", To: base.Add(time.Hour)}
 	if got := loader.Filter(q); len(got) != 1 {
 		t.Errorf("expected 1 entry for overlapping window, got %d", len(got))
@@ -127,7 +123,6 @@ func TestQueryEndToEnd(t *testing.T) {
 	loader, _ := NewIndexLoader(dir)
 	engine := NewEngine(loader)
 
-	// Filter by project only.
 	resp, err := engine.Execute(Query{Project: "billing"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -141,7 +136,6 @@ func TestQueryEndToEnd(t *testing.T) {
 		}
 	}
 
-	// Filter by logid only.
 	resp, err = engine.Execute(Query{LogID: "req-1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -150,12 +144,10 @@ func TestQueryEndToEnd(t *testing.T) {
 		t.Errorf("count = %d, want 2", resp.Count)
 	}
 
-	// Default order is desc by timestamp.
 	if !resp.Results[0].Timestamp.After(resp.Results[1].Timestamp) {
 		t.Errorf("default order is not desc: %v", resp.Results)
 	}
 
-	// Limit honoured.
 	resp, err = engine.Execute(Query{Project: "billing", Limit: 1})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -164,7 +156,6 @@ func TestQueryEndToEnd(t *testing.T) {
 		t.Errorf("limit not honoured: count = %d", resp.Count)
 	}
 
-	// Asc order.
 	resp, err = engine.Execute(Query{Project: "billing", Order: OrderAsc, Limit: 10})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -204,7 +195,6 @@ func TestHTTPHandlers(t *testing.T) {
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()
 
-	// /healthz
 	resp, err := http.Get(ts.URL + "/healthz")
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
@@ -214,7 +204,6 @@ func TestHTTPHandlers(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// /query without required param
 	resp, err = http.Get(ts.URL + "/query")
 	if err != nil {
 		t.Fatalf("GET /query: %v", err)
@@ -224,7 +213,6 @@ func TestHTTPHandlers(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// /query with project
 	resp, err = http.Get(ts.URL + "/query?project=billing")
 	if err != nil {
 		t.Fatalf("GET /query?project=billing: %v", err)
@@ -241,7 +229,6 @@ func TestHTTPHandlers(t *testing.T) {
 		t.Errorf("unexpected response: %+v", got)
 	}
 
-	// /files
 	resp, err = http.Get(ts.URL + "/files")
 	if err != nil {
 		t.Fatalf("GET /files: %v", err)
@@ -271,13 +258,12 @@ func TestHTTPHealthzViaRun(t *testing.T) {
 }
 
 // TestRunGracefulShutdown verifies that Run() unblocks when the context is
-// cancelled and that the listener is torn down.
+// cancelled and the listener is torn down.
 func TestRunGracefulShutdown(t *testing.T) {
 	dir := t.TempDir()
 	loader, _ := NewIndexLoader(dir)
 	srv := NewServer(loader, nil)
 
-	// Pick a free port via :0 then close immediately so Run can rebind.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -289,7 +275,6 @@ func TestRunGracefulShutdown(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx, addr, time.Second) }()
 
-	// Wait until the listener is accepting.
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)

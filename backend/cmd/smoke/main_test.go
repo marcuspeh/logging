@@ -13,8 +13,6 @@ func TestQueryCountURL(t *testing.T) {
 		t.Errorf("URL = %q, want %q", got, want)
 	}
 
-	// Empty params + missing project + missing logid → fall back to a
-	// billing-service query so the API doesn't 400.
 	got = buildQueryURL("http://localhost:8080", map[string]string{})
 	want = "http://localhost:8080/query?project=billing-service"
 	if got != want {
@@ -24,8 +22,8 @@ func TestQueryCountURL(t *testing.T) {
 
 func TestIsTransientNet(t *testing.T) {
 	cases := []struct {
-		err   error
-		want  bool
+		err  error
+		want bool
 	}{
 		{nil, false},
 		{errors.New("dial tcp 127.0.0.1:9092: connect: connection refused"), true},

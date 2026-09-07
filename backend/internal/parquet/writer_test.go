@@ -57,7 +57,6 @@ func TestWriteAndCloseRoundTrip(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Locate the Parquet file + its index sidecar.
 	files, err := filepath.Glob(filepath.Join(dir, "logs-*.parquet"))
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
@@ -67,7 +66,6 @@ func TestWriteAndCloseRoundTrip(t *testing.T) {
 	}
 	pq := files[0]
 
-	// Sidecar JSON must exist.
 	idxPath := pq + idxSuffix
 	idxBytes, err := os.ReadFile(idxPath)
 	if err != nil {
@@ -88,7 +86,6 @@ func TestWriteAndCloseRoundTrip(t *testing.T) {
 		t.Errorf("index size_bytes = %d, want > 0", idx.SizeBytes)
 	}
 
-	// Re-open the Parquet file and read every row back.
 	pf, err := os.Open(pq)
 	if err != nil {
 		t.Fatalf("open parquet: %v", err)
@@ -106,8 +103,6 @@ func TestWriteAndCloseRoundTrip(t *testing.T) {
 	if len(rows) != len(events) {
 		t.Fatalf("round-trip row count = %d, want %d", len(rows), len(events))
 	}
-	// Compare ignoring order (parquet preserves insertion order via row groups
-	// but we don't depend on that).
 	gotProjects := make(map[string]int)
 	for _, r := range rows {
 		gotProjects[r.Project]++
@@ -119,7 +114,7 @@ func TestWriteAndCloseRoundTrip(t *testing.T) {
 
 func TestRotationProducesMultipleFiles(t *testing.T) {
 	dir := t.TempDir()
-	// Very small rotation threshold to force rotation on a small payload.
+	// Tiny rotation threshold forces rotation on a small payload.
 	w, err := New(dir, 200)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -139,7 +134,6 @@ func TestRotationProducesMultipleFiles(t *testing.T) {
 			t.Fatalf("Write %d: %v", i, err)
 		}
 	}
-	// Close so the final file is sealed and its index sidecar is written.
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -152,7 +146,6 @@ func TestRotationProducesMultipleFiles(t *testing.T) {
 		t.Fatalf("expected >=2 parquet files due to rotation, got %d (%v)", len(files), files)
 	}
 
-	// Every Parquet file should have a sidecar index.
 	for _, f := range files {
 		idxPath := f + idxSuffix
 		if _, err := os.Stat(idxPath); err != nil {
@@ -182,7 +175,6 @@ func TestExplicitRotate(t *testing.T) {
 	if len(files) != 2 {
 		t.Errorf("after explicit Rotate, expected 2 files, got %d", len(files))
 	}
-	// Closing should not error even though we already rotated once.
 	if err := w.Close(); err != nil {
 		t.Errorf("Close after explicit Rotate: %v", err)
 	}

@@ -1,11 +1,10 @@
 // Package api exposes the HTTP query endpoints backed by the Parquet index
 // and files (PLAN §6).
 //
-// The package is split into three files:
-//
-//   - index.go  : IndexLoader — caches *.idx.json sidecars from ParquetDir.
-//   - query.go  : QueryEngine — runs the filter over surviving Parquet files.
-//   - server.go : HTTP handlers, router wiring, and Server.Run().
+// Split into three files:
+//   - index.go  : IndexLoader — caches *.idx.json sidecars.
+//   - query.go  : QueryEngine — filter + scan across surviving Parquet files.
+//   - server.go : HTTP handlers, router wiring, Server.Run().
 package api
 
 import (
@@ -21,7 +20,6 @@ import (
 	"github.com/marcuspeh/logging-backend/internal/parquet"
 )
 
-// indexSuffix matches what the writer uses (parquet.idxSuffix).
 const indexSuffix = ".parquet.idx.json"
 
 // IndexEntry pairs a parsed Index with the absolute path of its Parquet file.
@@ -31,8 +29,7 @@ type IndexEntry struct {
 }
 
 // IndexLoader scans a directory for *.parquet.idx.json sidecars, parses
-// them, and serves them from an in-memory cache. Reload() can be called
-// any time to refresh.
+// them, and serves them from an in-memory cache. Reload() refreshes it.
 type IndexLoader struct {
 	dir string
 
@@ -49,9 +46,8 @@ func NewIndexLoader(dir string) (*IndexLoader, error) {
 	return l, nil
 }
 
-// Reload re-scans the directory and rebuilds the cache. Files that have no
-// sidecar yet (still-open writer) are skipped — they will appear in the
-// cache once the writer seals them.
+// Reload re-scans the directory and rebuilds the cache. Files without a
+// sidecar (still-open writer) are skipped.
 func (l *IndexLoader) Reload() error {
 	if l.dir == "" {
 		return fmt.Errorf("api: index loader dir is empty")
@@ -71,8 +67,6 @@ func (l *IndexLoader) Reload() error {
 
 	var entries []IndexEntry
 	for _, idxPath := range matches {
-		// Translate ".../logs-X-NNNN.parquet.idx.json" back to
-		// ".../logs-X-NNNN.parquet".
 		pqPath := strings.TrimSuffix(idxPath, ".idx.json")
 
 		data, err := os.ReadFile(idxPath)
@@ -86,8 +80,6 @@ func (l *IndexLoader) Reload() error {
 		entries = append(entries, IndexEntry{Index: idx, Path: pqPath})
 	}
 
-	// Newest first so query results in default order (desc) come from
-	// recent files cheaply.
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Index.Started.After(entries[j].Index.Started)
 	})
@@ -114,14 +106,9 @@ func (l *IndexLoader) Count() int {
 	return len(l.entries)
 }
 
-// Filter narrows the cached entries by the given query predicates.
-// Entries survive only if:
-//
-//   - their time range overlaps [from, to] (open-ended bounds are honoured),
-//   - and project (if non-empty) is listed in the entry's project set.
-//
-// The slice returned is a fresh copy and may be reordered / truncated by the
-// caller.
+// Filter narrows the cached entries by query predicates. Entries survive
+// only if their time range overlaps [from, to] (open-ended bounds are
+// honoured) and project (if non-empty) appears in the entry's project set.
 func (l *IndexLoader) Filter(q Query) []IndexEntry {
 	candidates := l.Entries()
 	if candidates == nil {
@@ -140,8 +127,6 @@ func (l *IndexLoader) Filter(q Query) []IndexEntry {
 	return out
 }
 
-// contains is a tiny case-sensitive substring check; the project list is
-// small (low cardinality) so a map is overkill.
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {

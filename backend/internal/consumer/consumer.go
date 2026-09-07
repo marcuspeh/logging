@@ -1,11 +1,9 @@
-// Package consumer reads log events from Kafka and hands them to the Parquet
-// writer.
+// Package consumer reads log events from Kafka and hands them to a Sink.
 //
-// Delivery semantics (PLAN §4): at-least-once. We only commit the Kafka
-// offset after the corresponding row has been successfully written to the
-// Parquet writer. A Kafka message that fails JSON decoding is treated as a
-// poison pill — logged and skipped — so a single bad row cannot stall the
-// whole consumer.
+// Delivery semantics (PLAN §4): at-least-once. The Kafka offset is committed
+// only after the Sink has accepted the event. Decode failures are treated
+// as poison pills — logged, committed, and skipped — so one bad row cannot
+// stall the consumer.
 package consumer
 
 import (
@@ -23,9 +21,14 @@ import (
 )
 
 // Sink is the minimal contract the consumer needs from a Parquet writer.
-// parquet.Writer satisfies it.
 type Sink interface {
 	Write(ev model.LogEvent) error
+}
+
+type config struct {
+	brokers []string
+	topic   string
+	groupID string
 }
 
 // Consumer pulls messages from a Kafka topic and forwards decoded events
@@ -38,18 +41,12 @@ type Consumer struct {
 	skipped int64
 }
 
-type config struct {
-	brokers []string
-	topic   string
-	groupID string
-}
-
 // Options configures a Consumer.
 type Options struct {
 	Brokers []string
 	Topic   string
 	GroupID string
-	Logger  *slog.Logger // optional; defaults to slog.Default()
+	Logger  *slog.Logger
 }
 
 // New builds a Consumer.
@@ -83,17 +80,16 @@ func New(opts Options, sink Sink) (*Consumer, error) {
 	}, nil
 }
 
-// Run blocks until ctx is cancelled, consuming messages. It returns nil on
-// graceful shutdown; non-nil errors are returned for unrecoverable Kafka
-// failures.
+// Run blocks until ctx is cancelled. Returns nil on graceful shutdown;
+// non-nil errors for unrecoverable Kafka failures.
 func (c *Consumer) Run(ctx context.Context) error {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        c.cfg.brokers,
 		Topic:          c.cfg.topic,
 		GroupID:        c.cfg.groupID,
 		MinBytes:       1,
-		MaxBytes:       10 << 20, // 10 MiB
-		CommitInterval: 0,        // commit synchronously after Write
+		MaxBytes:       10 << 20,
+		CommitInterval: 0,
 		MaxWait:        500 * time.Millisecond,
 		StartOffset:    kafka.FirstOffset,
 	})
@@ -116,7 +112,6 @@ func (c *Consumer) Run(ctx context.Context) error {
 				"partition", msg.Partition,
 				"err", decErr,
 			)
-			// Commit anyway so we don't loop forever on a bad row.
 			if cerr := r.CommitMessages(ctx, msg); cerr != nil &&
 				!errors.Is(cerr, context.Canceled) {
 				return fmt.Errorf("consumer: commit poison: %w", cerr)
@@ -125,7 +120,6 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 
 		if werr := c.sink.Write(ev); werr != nil {
-			// Do NOT commit — the next poll will re-deliver this offset.
 			return fmt.Errorf("consumer: sink write: %w", werr)
 		}
 		c.decoded++

@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// withEnv sets env vars for the duration of the test and restores them on
-// cleanup.
 func withEnv(t *testing.T, kv map[string]string) {
 	t.Helper()
 	for k, v := range kv {
@@ -15,7 +13,6 @@ func withEnv(t *testing.T, kv map[string]string) {
 }
 
 func TestDefaults(t *testing.T) {
-	// Ensure no relevant env vars leak in from the host.
 	t.Setenv("KAFKA_BROKERS", "")
 	t.Setenv("KAFKA_TOPIC", "")
 	t.Setenv("KAFKA_GROUP_ID", "")

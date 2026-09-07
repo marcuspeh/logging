@@ -74,7 +74,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// fileEntry is the JSON shape for /files.
 type fileEntry struct {
 	File      string    `json:"file"`
 	Started   time.Time `json:"started"`
