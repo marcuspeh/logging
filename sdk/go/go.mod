@@ -1,4 +1,4 @@
-module github.com/marcuspeh/logging-sdk-go
+module github.com/marcuspeh/logging/sdk/go
 
 go 1.23.2
 

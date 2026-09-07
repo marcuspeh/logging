@@ -9,7 +9,7 @@ Implements PLAN §7.
 ## Install
 
 ```bash
-go get github.com/marcuspeh/logging-sdk-go
+go get github.com/marcuspeh/logging/sdk/go
 ```
 
 ## Usage
@@ -18,7 +18,7 @@ The SDK pulls the correlation id from `context.Context`. Attach one at the
 top of each request with `WithLogID`:
 
 ```go
-import loggingsdk "github.com/marcuspeh/logging-sdk-go"
+import loggingsdk "github.com/marcuspeh/logging/sdk/go"
 
 func main() {
     log, err := loggingsdk.New("kafka:9092", "billing-service",
