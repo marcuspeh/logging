@@ -1,0 +1,66 @@
+# Backend stack: Kafka broker + log-collector service.
+#
+# Run from backend/:  docker compose up -d
+#
+# Ports exposed on the host:
+#   9092  Kafka (PLAINTEXT, for SDKs / external producers)
+#   8080  Collector HTTP query API
+#
+# Persistence:
+#   - Kafka broker state is in the named volume `kafka-data`.
+#   - Parquet files written by the collector are persisted on the host via
+#     the bind mount under `collector.volumes`. Deleting or recreating the
+#     collector container does NOT remove those host files — log files are
+#     durable across restarts. To wipe logs, delete the host directory
+#     contents.
+#
+# The default host path is /home/marcuspeh/data/logging-system; edit the
+# bind mount to point at wherever you want logs stored.
+
+services:
+  kafka:
+    container_name: logging-kafka
+    image: bitnami/kafka:3.7
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft single-node controller+broker.
+      KAFKA_CFG_NODE_ID: "0"
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka:9093"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - kafka-data:/bitnami/kafka
+
+  collector:
+    container_name: logging-collector
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_TOPIC: "logs"
+      KAFKA_GROUP_ID: "logging-collector"
+      PARQUET_DIR: "/data/parquet"
+      PARQUET_ROTATE_BYTES: "134217728"
+      HTTP_ADDR: ":8080"
+      SHUTDOWN_TIMEOUT: "10s"
+    volumes:
+      - /home/marcuspeh/data/logging-system:/data
+
+volumes:
+  kafka-data:

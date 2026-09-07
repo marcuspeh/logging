@@ -1,0 +1,11 @@
+# Exclude everything that isn't needed for the Go build.
+data/
+.git/
+.gitkeep
+.idea/
+.vscode/
+*.md
+docker-compose.yml
+*.test
+*.out
+/logging-backend

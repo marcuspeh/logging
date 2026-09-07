@@ -1,6 +1,5 @@
-# Local Parquet data volume (mounted into the collector container)
-data/
-/data/
+# Parquet files live on an absolute host path (see docker-compose.yml).
+# Nothing to ignore here — that path is outside the repo.
 
 # Go build artefacts
 /logging-backend
