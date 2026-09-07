@@ -62,6 +62,21 @@ maps host port `4665` to it. Override either side by editing
 | `PARQUET_ROTATE_BYTES` | `134217728` (128 MiB) |
 | `HTTP_ADDR` | `:8080` |
 | `SHUTDOWN_TIMEOUT` | `10s` |
+| `RETENTION` | `336h` (14 days) |
+| `RETENTION_INTERVAL` | `1h` |
+
+## Retention
+
+The collector sweeps the Parquet directory every `RETENTION_INTERVAL`
+and removes any sealed file whose last event timestamp (read from the
+sidecar `*.idx.json`) is older than `RETENTION`. The active (currently
+open) file is never removed.
+
+Set `RETENTION=0` to disable deletion entirely (sweep still runs but
+deletes nothing).
+
+Corrupt or missing sidecar files are skipped (never deleted), so a
+single bad index can't take out live data.
 
 ## Parquet file layout
 

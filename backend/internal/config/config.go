@@ -22,6 +22,8 @@ type Config struct {
 	ParquetRotateBytes int64
 	HTTPAddr           string
 	ShutdownTimeout    time.Duration
+	Retention          time.Duration
+	RetentionInterval  time.Duration
 }
 
 // Defaults returns the default configuration used when no env overrides are
@@ -35,6 +37,8 @@ func Defaults() Config {
 		ParquetRotateBytes: 128 * 1024 * 1024,
 		HTTPAddr:           ":8080",
 		ShutdownTimeout:    10 * time.Second,
+		Retention:          14 * 24 * time.Hour,
+		RetentionInterval:  1 * time.Hour,
 	}
 }
 
@@ -84,6 +88,26 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("config: SHUTDOWN_TIMEOUT must be > 0, got %s", d)
 		}
 		cfg.ShutdownTimeout = d
+	}
+	if v := os.Getenv("RETENTION"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("config: RETENTION=%q is not a valid duration: %w", v, err)
+		}
+		if d < 0 {
+			return cfg, fmt.Errorf("config: RETENTION must be >= 0, got %s", d)
+		}
+		cfg.Retention = d
+	}
+	if v := os.Getenv("RETENTION_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("config: RETENTION_INTERVAL=%q is not a valid duration: %w", v, err)
+		}
+		if d <= 0 {
+			return cfg, fmt.Errorf("config: RETENTION_INTERVAL must be > 0, got %s", d)
+		}
+		cfg.RetentionInterval = d
 	}
 	return cfg, nil
 }

@@ -25,6 +25,35 @@ import (
 
 const indexReloadInterval = 30 * time.Second
 
+// retentionLoop deletes Parquet files older than cfg.Retention every
+// cfg.RetentionInterval. A sweep failure is logged but not fatal.
+func retentionLoop(ctx context.Context, pw *parquet.Writer, ttl, interval time.Duration, logger *slog.Logger) {
+	if ttl <= 0 || interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			res, err := pw.SweepRetention(time.Now(), ttl)
+			if err != nil {
+				logger.Warn("retention sweep failed", "err", err)
+				continue
+			}
+			if len(res.Deleted) > 0 {
+				logger.Info("retention sweep",
+					"deleted", len(res.Deleted),
+					"scanned", res.Scanned,
+					"bytes_freed", res.BytesFreed,
+				)
+			}
+		}
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
@@ -47,6 +76,8 @@ func run(logger *slog.Logger) error {
 		"parquet_rotate_bytes", cfg.ParquetRotateBytes,
 		"http_addr", cfg.HTTPAddr,
 		"shutdown_timeout", cfg.ShutdownTimeout,
+		"retention", cfg.Retention,
+		"retention_interval", cfg.RetentionInterval,
 	)
 
 	pw, err := parquet.New(cfg.ParquetDir, cfg.ParquetRotateBytes)
@@ -81,6 +112,12 @@ func run(logger *slog.Logger) error {
 	go func() {
 		defer wg.Done()
 		reloadLoop(rootCtx, loader, logger)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		retentionLoop(rootCtx, pw, cfg.Retention, cfg.RetentionInterval, logger)
 	}()
 
 	wg.Add(1)

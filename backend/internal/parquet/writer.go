@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,14 +131,98 @@ func (w *Writer) Close() error {
 // Dir returns the directory the writer writes into.
 func (w *Writer) Dir() string { return w.dir }
 
+// RetentionResult summarises one retention sweep.
+type RetentionResult struct {
+	Scanned    int      // sidecar index files inspected
+	Deleted    []string // base names of parquet files removed
+	Skipped    int      // index files that were missing or malformed
+	BytesFreed int64    // combined on-disk size of removed files
+}
+
+// SweepRetention removes sealed Parquet files whose last event timestamp
+// (per the sidecar index) is older than `now - ttl`. The active file is
+// never removed, even if its index is stale. Index files without a
+// parseable Ended timestamp are left alone (Skipped) — better to leak a
+// file than to delete live data based on a corrupt index.
+func (w *Writer) SweepRetention(now time.Time, ttl time.Duration) (RetentionResult, error) {
+	var res RetentionResult
+
+	entries, err := os.ReadDir(w.dir)
+	if err != nil {
+		return res, fmt.Errorf("parquet: read dir: %w", err)
+	}
+
+	cutoff := now.Add(-ttl)
+	active := w.activeBaseName()
+
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, idxSuffix) {
+			continue
+		}
+		res.Scanned++
+
+		path := filepath.Join(w.dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			res.Skipped++
+			continue
+		}
+		var idx Index
+		if err := json.Unmarshal(data, &idx); err != nil {
+			res.Skipped++
+			continue
+		}
+		base := strings.TrimSuffix(name, idxSuffix)
+		if base == active {
+			continue
+		}
+		if idx.Ended.IsZero() || idx.Ended.After(cutoff) {
+			continue
+		}
+
+		pqPath := filepath.Join(w.dir, base)
+		if st, err := os.Stat(pqPath); err == nil {
+			res.BytesFreed += st.Size()
+		}
+		if err := os.Remove(pqPath); err != nil && !os.IsNotExist(err) {
+			res.Skipped++
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			res.Skipped++
+			continue
+		}
+		res.Deleted = append(res.Deleted, base)
+	}
+	return res, nil
+}
+
+// activeBaseName returns the base name (no extension) of the writer's
+// current Parquet file, or "" if none is open.
+func (w *Writer) activeBaseName() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.currentPath == "" {
+		return ""
+	}
+	return filepath.Base(w.currentPath)
+}
+
 // openNewFile creates a fresh file + writer and resets per-file
 // accumulators. Caller must hold w.mu.
 func (w *Writer) openNewFile() error {
 	now := time.Now().UTC()
-	name := fmt.Sprintf("%s%d-%04d.parquet", filePrefix, now.Unix(), w.seq)
+	seq := w.seq
+	if s := nextSeq(w.dir, now.Unix()); s > seq {
+		seq = s
+	}
+	w.seq = seq + 1
+
+	name := fmt.Sprintf("%s%d-%04d.parquet", filePrefix, now.Unix(), seq)
 	path := filepath.Join(w.dir, name)
 
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return fmt.Errorf("parquet: create %s: %w", path, err)
 	}
@@ -154,8 +240,38 @@ func (w *Writer) openNewFile() error {
 	w.minTs = time.Time{}
 	w.maxTs = time.Time{}
 	w.projects = make(map[string]struct{})
-	w.seq++
 	return nil
+}
+
+// nextSeq scans dir for the highest sequence suffix used by files
+// matching `<filePrefix><unix>-NNNN.parquet` and returns the next free
+// sequence. Returns 0 when the directory is empty or unreadable.
+func nextSeq(dir string, unix int64) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	prefix := fmt.Sprintf("%s%d-", filePrefix, unix)
+	best := -1
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".parquet") {
+			continue
+		}
+		mid := strings.TrimPrefix(name, prefix)
+		mid = strings.TrimSuffix(mid, ".parquet")
+		n, err := strconv.Atoi(mid)
+		if err != nil {
+			continue
+		}
+		if n > best {
+			best = n
+		}
+	}
+	if best < 0 {
+		return 0
+	}
+	return best + 1
 }
 
 // rotateLocked closes the current file (writing its index) and opens the

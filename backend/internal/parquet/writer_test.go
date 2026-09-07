@@ -180,6 +180,116 @@ func TestExplicitRotate(t *testing.T) {
 	}
 }
 
+func TestSweepRetention(t *testing.T) {
+	dir := t.TempDir()
+
+	// Two sealed files (old + fresh) and one active file (recent).
+	w, err := New(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	write := func(ts time.Time) {
+		_ = w.Write(model.LogEvent{
+			Timestamp: ts, Project: "p", LogID: "l", Level: "INFO", Message: "m",
+		})
+	}
+
+	old := time.Now().Add(-30 * 24 * time.Hour) // older than TTL
+	mid := time.Now().Add(-10 * 24 * time.Hour) // within TTL
+	fresh := time.Now().Add(-1 * time.Hour)     // within TTL
+
+	write(old)
+	if err := w.Rotate(); err != nil {
+		t.Fatalf("Rotate after old: %v", err)
+	}
+	write(mid)
+	if err := w.Rotate(); err != nil {
+		t.Fatalf("Rotate after mid: %v", err)
+	}
+	write(fresh) // stays in the active file
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen writer for retention sweep — the active file from Close()
+	// is now a sealed file too, but a fresh writer has no active file.
+	w2, err := New(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("reopen New: %v", err)
+	}
+	defer w2.Close()
+
+	res, err := w2.SweepRetention(time.Now(), 14*24*time.Hour)
+	if err != nil {
+		t.Fatalf("SweepRetention: %v", err)
+	}
+	if len(res.Deleted) != 1 {
+		t.Errorf("Deleted = %d, want 1 (the old file); deleted=%v scanned=%d skipped=%d",
+			len(res.Deleted), res.Deleted, res.Scanned, res.Skipped)
+	}
+	if res.BytesFreed <= 0 {
+		t.Errorf("BytesFreed = %d, want > 0", res.BytesFreed)
+	}
+
+	// Confirm the old parquet + its sidecar are gone.
+	for _, base := range res.Deleted {
+		if _, err := os.Stat(filepath.Join(dir, base)); !os.IsNotExist(err) {
+			t.Errorf("expected %s removed, err=%v", base, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, base+idxSuffix)); !os.IsNotExist(err) {
+			t.Errorf("expected %s index removed, err=%v", base, err)
+		}
+	}
+}
+
+func TestSweepRetentionNeverDeletesActive(t *testing.T) {
+	dir := t.TempDir()
+	w, err := New(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer w.Close()
+
+	// Backdate the only file via a synthetic old index, then verify
+	// SweepRetention leaves it alone because it's the active file.
+	_ = w.Write(model.LogEvent{
+		Timestamp: time.Now().Add(-30 * 24 * time.Hour),
+		Project:   "p", LogID: "l", Level: "INFO", Message: "m",
+	})
+
+	// Active file is still open (no Rotate/Close). Force its sidecar
+	// index to look old by manually rewriting timestamps.
+	files, _ := filepath.Glob(filepath.Join(dir, "logs-*.parquet"))
+	if len(files) != 1 {
+		t.Fatalf("expected 1 active file, got %d", len(files))
+	}
+	idxPath := files[0] + idxSuffix
+	idx := Index{
+		File:      filepath.Base(files[0]),
+		Started:   time.Now().Add(-30 * 24 * time.Hour),
+		Ended:     time.Now().Add(-30 * 24 * time.Hour),
+		RowCount:  1,
+		Projects:  []string{"p"},
+		SizeBytes: 0,
+	}
+	b, _ := json.Marshal(idx)
+	if err := os.WriteFile(idxPath, b, 0o644); err != nil {
+		t.Fatalf("rewrite index: %v", err)
+	}
+
+	res, err := w.SweepRetention(time.Now(), 14*24*time.Hour)
+	if err != nil {
+		t.Fatalf("SweepRetention: %v", err)
+	}
+	if len(res.Deleted) != 0 {
+		t.Errorf("active file must not be deleted; deleted=%v", res.Deleted)
+	}
+	if _, err := os.Stat(files[0]); err != nil {
+		t.Errorf("active file disappeared: %v", err)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
