@@ -1,0 +1,13 @@
+# Local Parquet data volume (mounted into the collector container)
+data/
+/data/
+
+# Go build artefacts
+/logging-backend
+*.test
+*.out
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
