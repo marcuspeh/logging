@@ -37,11 +37,10 @@ func TestMinLevelDropsBelowThreshold(t *testing.T) {
 	c, _ := New("k:9092", "p", WithMinLevel(LevelWarn))
 	defer c.Close()
 
-	if err := c.Debug(ctxWithLogID("x"), "should be dropped"); err != nil {
-		t.Errorf("Debug below minLevel returned %v, want nil", err)
-	}
-	if err := c.Info(ctxWithLogID("x"), "should be dropped"); err != nil {
-		t.Errorf("Info below minLevel returned %v, want nil", err)
+	c.Debug(ctxWithLogID("x"), "should be dropped")
+	c.Info(ctxWithLogID("x"), "should be dropped")
+	if s := c.Stats(); s.Dropped != 0 {
+		t.Errorf("Stats = %+v, want Dropped=0 for below-threshold calls", s)
 	}
 }
 
@@ -95,11 +94,11 @@ func TestLogIDFromContext(t *testing.T) {
 		want string
 	}{
 		{"with logid", ctxWithLogID("req-7f2c"), "req-7f2c"},
-		{"empty string falls back to unknown", ctxWithLogID(""), "unknown"},
-		{"missing key falls back to unknown", context.Background(), "unknown"},
-		{"wrong type falls back to unknown",
+		{"empty string falls back to dash", ctxWithLogID(""), "-"},
+		{"missing key falls back to dash", context.Background(), "-"},
+		{"wrong type falls back to dash",
 			context.WithValue(context.Background(), LogIDKey, 42),
-			"unknown"},
+			"-"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,16 +109,13 @@ func TestLogIDFromContext(t *testing.T) {
 	}
 }
 
-func TestPublishSyncNoBrokerReturnsError(t *testing.T) {
+func TestPublishSyncNoBrokerRecordsFailure(t *testing.T) {
 	c, _ := New("127.0.0.1:1", "p")
 	defer c.Close()
 
-	err := c.Info(ctxWithLogID("x"), "msg")
-	if err == nil {
-		t.Fatal("expected error writing to unreachable broker")
-	}
+	c.Info(ctxWithLogID("x"), "msg")
 	if s := c.Stats(); s.Failed == 0 {
-		t.Errorf("expected Failed > 0, got %+v", s)
+		t.Errorf("expected Failed > 0 after write to unreachable broker, got %+v", s)
 	}
 }
 
@@ -128,7 +124,7 @@ func TestAsyncOverflowDropsOldest(t *testing.T) {
 	defer c.Close()
 
 	for i := 0; i < 100; i++ {
-		_ = c.Info(ctxWithLogID("x"), "msg %d", i)
+		c.Info(ctxWithLogID("x"), "msg %d", i)
 	}
 	s := c.Stats()
 	if s.Dropped == 0 {

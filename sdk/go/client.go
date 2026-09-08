@@ -138,24 +138,24 @@ func (c *Client) Log(ctx context.Context, level Level, message string, args ...a
 	return c.publish(ctx, "logs", []byte(c.project), payload)
 }
 
-func (c *Client) Debug(ctx context.Context, format string, args ...any) error {
-	return c.Log(ctx, LevelDebug, format, args...)
+func (c *Client) Debug(ctx context.Context, format string, args ...any) {
+	c.Log(ctx, LevelDebug, format, args...)
 }
 
-func (c *Client) Info(ctx context.Context, format string, args ...any) error {
-	return c.Log(ctx, LevelInfo, format, args...)
+func (c *Client) Info(ctx context.Context, format string, args ...any) {
+	c.Log(ctx, LevelInfo, format, args...)
 }
 
-func (c *Client) Warn(ctx context.Context, format string, args ...any) error {
-	return c.Log(ctx, LevelWarn, format, args...)
+func (c *Client) Warn(ctx context.Context, format string, args ...any) {
+	c.Log(ctx, LevelWarn, format, args...)
 }
 
-func (c *Client) Error(ctx context.Context, format string, args ...any) error {
-	return c.Log(ctx, LevelError, format, args...)
+func (c *Client) Error(ctx context.Context, format string, args ...any) {
+	c.Log(ctx, LevelError, format, args...)
 }
 
-func (c *Client) Fatal(ctx context.Context, format string, args ...any) error {
-	return c.Log(ctx, LevelFatal, format, args...)
+func (c *Client) Fatal(ctx context.Context, format string, args ...any) {
+	c.Log(ctx, LevelFatal, format, args...)
 }
 
 func (c *Client) Close() error {
