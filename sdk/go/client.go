@@ -132,6 +132,7 @@ func (c *Client) Log(ctx context.Context, level Level, message string, args ...a
 		Message:   formatMessage(message, args),
 	})
 	if err != nil {
+		fmt.Printf("loggingsdk: encode: %v\n", err)
 		return fmt.Errorf("loggingsdk: encode: %w", err)
 	}
 
@@ -188,6 +189,7 @@ func (c *Client) publish(ctx context.Context, topic string, key, payload []byte)
 			case c.queue <- item:
 				return nil
 			default:
+				fmt.Printf("loggingsdk: queue full\n")
 				return errors.New("loggingsdk: queue full")
 			}
 		}
@@ -227,6 +229,7 @@ func (c *Client) sendSync(item asyncItem) {
 	defer cancel()
 	if err := c.writer.WriteMessages(ctx, kafka.Message{Topic: item.topic, Key: item.key, Value: item.payload}); err != nil {
 		c.failed.Add(1)
+		fmt.Printf("loggingsdk: async kafka write failed: %v\n", err)
 		c.logger.Warn("async kafka write failed", "err", err)
 		return
 	}
