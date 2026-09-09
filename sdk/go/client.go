@@ -89,7 +89,6 @@ func New(bootstrap, project string, opts ...Option) (*Client, error) {
 
 	c.writer = &kafka.Writer{
 		Addr:                   kafka.TCP(bootstrap),
-		Topic:                  "logs",
 		Balancer:               &kafka.Hash{},
 		RequiredAcks:           kafka.RequireAll,
 		Async:                  false,
