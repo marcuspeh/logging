@@ -197,6 +197,7 @@ func (c *Client) publish(ctx context.Context, topic string, key, payload []byte)
 	msg := kafka.Message{Topic: topic, Key: key, Value: payload}
 	if err := c.writer.WriteMessages(ctx, msg); err != nil {
 		c.failed.Add(1)
+		fmt.Printf("loggingsdk: kafka write failed project=%s: %v\n", c.project, err)
 		c.logger.Warn("kafka write failed", "err", err, "project", c.project)
 		return err
 	}
