@@ -16,7 +16,11 @@ import (
 
 func writeFixture(t *testing.T, dir string, events []model.LogEvent, rotateBytes int64) {
 	t.Helper()
-	w, err := parquet.New(dir, rotateBytes)
+	w, err := parquet.New(dir, parquet.FlushOptions{
+		RotateBytes: rotateBytes,
+		FlushRows:   1024,
+		FlushEvery:  5 * time.Second,
+	})
 	if err != nil {
 		t.Fatalf("parquet.New: %v", err)
 	}

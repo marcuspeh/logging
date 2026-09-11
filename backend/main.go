@@ -80,7 +80,12 @@ func run(logger *slog.Logger) error {
 		"retention_interval", cfg.RetentionInterval,
 	)
 
-	pw, err := parquet.New(cfg.ParquetDir, cfg.ParquetRotateBytes)
+	pw, err := parquet.New(cfg.ParquetDir, parquet.FlushOptions{
+		RotateBytes: cfg.ParquetRotateBytes,
+		RotateEvery: cfg.ParquetRotateEvery,
+		FlushRows:   cfg.ParquetFlushRows,
+		FlushEvery:  cfg.ParquetFlushEvery,
+	})
 	if err != nil {
 		return err
 	}

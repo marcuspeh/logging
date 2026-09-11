@@ -43,6 +43,9 @@ type Index struct {
 type Writer struct {
 	dir         string
 	rotateBytes int64
+	rotateEvery time.Duration
+	flushRows   int64
+	flushEvery  time.Duration
 
 	mu          sync.Mutex
 	out         *parquet.GenericWriter[model.LogEvent]
@@ -50,21 +53,46 @@ type Writer struct {
 	currentPath string
 	currentSize int64
 
-	rowCount int64
-	minTs    time.Time
-	maxTs    time.Time
-	projects map[string]struct{}
-	seq      int
+	rowCount    int64
+	pendingRows int64
+	lastFlush   time.Time
+	openedAt    time.Time
+	minTs       time.Time
+	maxTs       time.Time
+	projects    map[string]struct{}
+	seq         int
+}
+
+// FlushOptions controls how Write batches events into durable rows on
+// disk and how often the active file is sealed into a new one. The two
+// rotation triggers (size + time) and the two flush triggers (rows +
+// time) operate independently, so the active file becomes visible to
+// the query API within at most flushEvery (subject to fsync latency)
+// and is rotated within at most rotateEvery or rotateBytes.
+type FlushOptions struct {
+	RotateBytes int64         // rotate when active file reaches this size
+	RotateEvery time.Duration // rotate when active file is this old (0 = disabled)
+	FlushRows   int64         // flush parquet row group + sidecar after N rows
+	FlushEvery  time.Duration // flush parquet row group + sidecar after this duration
 }
 
 // New opens the first Parquet file in dir and returns a ready-to-use Writer.
 // If dir does not exist it is created with mode 0o755.
-func New(dir string, rotateBytes int64) (*Writer, error) {
+func New(dir string, opts FlushOptions) (*Writer, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("parquet: dir is empty")
 	}
-	if rotateBytes <= 0 {
-		return nil, fmt.Errorf("parquet: rotateBytes must be > 0, got %d", rotateBytes)
+	if opts.RotateBytes <= 0 {
+		return nil, fmt.Errorf("parquet: RotateBytes must be > 0, got %d", opts.RotateBytes)
+	}
+	if opts.RotateEvery < 0 {
+		return nil, fmt.Errorf("parquet: RotateEvery must be >= 0, got %s", opts.RotateEvery)
+	}
+	if opts.FlushRows <= 0 {
+		return nil, fmt.Errorf("parquet: FlushRows must be > 0, got %d", opts.FlushRows)
+	}
+	if opts.FlushEvery <= 0 {
+		return nil, fmt.Errorf("parquet: FlushEvery must be > 0, got %s", opts.FlushEvery)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("parquet: mkdir %s: %w", dir, err)
@@ -72,7 +100,10 @@ func New(dir string, rotateBytes int64) (*Writer, error) {
 
 	w := &Writer{
 		dir:         dir,
-		rotateBytes: rotateBytes,
+		rotateBytes: opts.RotateBytes,
+		rotateEvery: opts.RotateEvery,
+		flushRows:   opts.FlushRows,
+		flushEvery:  opts.FlushEvery,
 		projects:    make(map[string]struct{}),
 	}
 	if err := w.openNewFile(); err != nil {
@@ -81,8 +112,11 @@ func New(dir string, rotateBytes int64) (*Writer, error) {
 	return w, nil
 }
 
-// Write appends a single LogEvent. If the resulting file would exceed
-// rotateBytes, the current file is sealed and a new one is opened.
+// Write appends a single LogEvent. Writes are batched: the parquet row
+// group + sidecar are flushed when either pendingRows >= FlushRows or
+// FlushEvery has elapsed since the last flush. The active file is
+// rotated when currentSize >= RotateBytes, or when RotateEvery has
+// elapsed and the file has at least one row.
 func (w *Writer) Write(ev model.LogEvent) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -93,6 +127,7 @@ func (w *Writer) Write(ev model.LogEvent) error {
 
 	w.currentSize += approxRowBytes(ev)
 	w.rowCount++
+	w.pendingRows++
 
 	if ev.Project != "" {
 		w.projects[ev.Project] = struct{}{}
@@ -105,7 +140,22 @@ func (w *Writer) Write(ev model.LogEvent) error {
 		w.maxTs = ts
 	}
 
+	now := time.Now()
+	flushBySize := w.pendingRows >= w.flushRows
+	flushByTime := !w.lastFlush.IsZero() && now.Sub(w.lastFlush) >= w.flushEvery
+	if flushBySize || flushByTime {
+		if err := w.flushLocked(); err != nil {
+			return fmt.Errorf("parquet: flush: %w", err)
+		}
+	}
+
+	// Rotation triggers. Time-based rotation only fires when the active
+	// file has at least one row, so idle streams don't churn empty files.
 	if w.currentSize >= w.rotateBytes {
+		if err := w.rotateLocked(); err != nil {
+			return fmt.Errorf("parquet: rotate: %w", err)
+		}
+	} else if w.rotateEvery > 0 && w.rowCount > 0 && now.Sub(w.openedAt) >= w.rotateEvery {
 		if err := w.rotateLocked(); err != nil {
 			return fmt.Errorf("parquet: rotate: %w", err)
 		}
@@ -237,6 +287,9 @@ func (w *Writer) openNewFile() error {
 	w.currentPath = path
 	w.currentSize = 0
 	w.rowCount = 0
+	w.pendingRows = 0
+	w.openedAt = time.Now().UTC()
+	w.lastFlush = w.openedAt
 	w.minTs = time.Time{}
 	w.maxTs = time.Time{}
 	w.projects = make(map[string]struct{})
@@ -281,6 +334,35 @@ func (w *Writer) rotateLocked() error {
 		return err
 	}
 	return w.openNewFile()
+}
+
+// flushLocked drains the parquet writer's page buffer to disk, fsyncs,
+// and rewrites the sidecar index for the active file. Caller must hold
+// w.mu. Reset pendingRows and lastFlush on success.
+func (w *Writer) flushLocked() error {
+	if w.out == nil || w.file == nil {
+		return nil
+	}
+	if err := w.out.Flush(); err != nil {
+		return fmt.Errorf("parquet: flush: %w", err)
+	}
+	if err := w.file.Sync(); err != nil {
+		return fmt.Errorf("parquet: fsync: %w", err)
+	}
+	idx := Index{
+		File:      filepath.Base(w.currentPath),
+		Started:   w.minTs,
+		Ended:     w.maxTs,
+		RowCount:  w.rowCount,
+		Projects:  sortedKeys(w.projects),
+		SizeBytes: fileSize(w.currentPath),
+	}
+	if err := writeIndex(w.currentPath, idx); err != nil {
+		return err
+	}
+	w.pendingRows = 0
+	w.lastFlush = time.Now()
+	return nil
 }
 
 // closeLocked flushes, closes, fsyncs, and writes the sidecar index for the

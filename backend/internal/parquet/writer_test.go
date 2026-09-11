@@ -13,9 +13,21 @@ import (
 	"github.com/marcuspeh/logging-backend/internal/model"
 )
 
+// testOpts returns FlushOptions suitable for unit tests: small flush
+// thresholds so the size-rotate and time-rotate paths can be exercised
+// without long sleeps.
+func testOpts(rotateBytes int64, rotateEvery time.Duration) FlushOptions {
+	return FlushOptions{
+		RotateBytes: rotateBytes,
+		RotateEvery: rotateEvery,
+		FlushRows:   1024,
+		FlushEvery:  5 * time.Second,
+	}
+}
+
 func TestNewCreatesDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "parquet")
-	w, err := New(dir, 1024)
+	w, err := New(dir, testOpts(1024, 0))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -27,17 +39,17 @@ func TestNewCreatesDir(t *testing.T) {
 }
 
 func TestNewRejectsBadArgs(t *testing.T) {
-	if _, err := New("", 1); err == nil {
+	if _, err := New("", testOpts(1, 0)); err == nil {
 		t.Error("expected error for empty dir")
 	}
-	if _, err := New(t.TempDir(), 0); err == nil {
+	if _, err := New(t.TempDir(), testOpts(0, 0)); err == nil {
 		t.Error("expected error for rotateBytes=0")
 	}
 }
 
 func TestWriteAndCloseRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	w, err := New(dir, 1<<20) // 1 MiB - no rotation expected
+	w, err := New(dir, testOpts(1<<20, 0)) // 1 MiB - no rotation expected
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -115,7 +127,7 @@ func TestWriteAndCloseRoundTrip(t *testing.T) {
 func TestRotationProducesMultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Tiny rotation threshold forces rotation on a small payload.
-	w, err := New(dir, 200)
+	w, err := New(dir, testOpts(200, 0))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -156,7 +168,7 @@ func TestRotationProducesMultipleFiles(t *testing.T) {
 
 func TestExplicitRotate(t *testing.T) {
 	dir := t.TempDir()
-	w, err := New(dir, 1<<20)
+	w, err := New(dir, testOpts(1<<20, 0))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -184,7 +196,7 @@ func TestSweepRetention(t *testing.T) {
 	dir := t.TempDir()
 
 	// Two sealed files (old + fresh) and one active file (recent).
-	w, err := New(dir, 1<<20)
+	w, err := New(dir, testOpts(1<<20, 0))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -214,7 +226,7 @@ func TestSweepRetention(t *testing.T) {
 
 	// Reopen writer for retention sweep — the active file from Close()
 	// is now a sealed file too, but a fresh writer has no active file.
-	w2, err := New(dir, 1<<20)
+	w2, err := New(dir, testOpts(1<<20, 0))
 	if err != nil {
 		t.Fatalf("reopen New: %v", err)
 	}
@@ -245,7 +257,7 @@ func TestSweepRetention(t *testing.T) {
 
 func TestSweepRetentionNeverDeletesActive(t *testing.T) {
 	dir := t.TempDir()
-	w, err := New(dir, 1<<20)
+	w, err := New(dir, testOpts(1<<20, 0))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -20,6 +20,9 @@ type Config struct {
 	KafkaGroupID       string
 	ParquetDir         string
 	ParquetRotateBytes int64
+	ParquetRotateEvery time.Duration
+	ParquetFlushRows   int64
+	ParquetFlushEvery  time.Duration
 	HTTPAddr           string
 	ShutdownTimeout    time.Duration
 	Retention          time.Duration
@@ -35,6 +38,9 @@ func Defaults() Config {
 		KafkaGroupID:       "logging-collector",
 		ParquetDir:         "/data/parquet",
 		ParquetRotateBytes: 128 * 1024 * 1024,
+		ParquetRotateEvery: 5 * time.Minute,
+		ParquetFlushRows:   1024,
+		ParquetFlushEvery:  5 * time.Second,
 		HTTPAddr:           ":8080",
 		ShutdownTimeout:    10 * time.Second,
 		Retention:          14 * 24 * time.Hour,
@@ -75,6 +81,36 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("config: PARQUET_ROTATE_BYTES must be > 0, got %d", n)
 		}
 		cfg.ParquetRotateBytes = n
+	}
+	if v := os.Getenv("PARQUET_ROTATE_EVERY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("config: PARQUET_ROTATE_EVERY=%q is not a valid duration: %w", v, err)
+		}
+		if d < 0 {
+			return cfg, fmt.Errorf("config: PARQUET_ROTATE_EVERY must be >= 0, got %s", d)
+		}
+		cfg.ParquetRotateEvery = d
+	}
+	if v := os.Getenv("PARQUET_FLUSH_ROWS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return cfg, fmt.Errorf("config: PARQUET_FLUSH_ROWS=%q is not a valid integer: %w", v, err)
+		}
+		if n <= 0 {
+			return cfg, fmt.Errorf("config: PARQUET_FLUSH_ROWS must be > 0, got %d", n)
+		}
+		cfg.ParquetFlushRows = n
+	}
+	if v := os.Getenv("PARQUET_FLUSH_EVERY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("config: PARQUET_FLUSH_EVERY=%q is not a valid duration: %w", v, err)
+		}
+		if d <= 0 {
+			return cfg, fmt.Errorf("config: PARQUET_FLUSH_EVERY must be > 0, got %s", d)
+		}
+		cfg.ParquetFlushEvery = d
 	}
 	if v := os.Getenv("HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
