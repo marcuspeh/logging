@@ -181,6 +181,21 @@ func (w *Writer) Close() error {
 // Dir returns the directory the writer writes into.
 func (w *Writer) Dir() string { return w.dir }
 
+// RotateBytes returns the byte threshold at which the writer rotates
+// files. Used by the compactor to size its batches.
+func (w *Writer) RotateBytes() int64 { return w.rotateBytes }
+
+// ActiveBaseName returns the base name (no extension) of the writer's
+// current Parquet file, or "" if none is open. Safe for concurrent use.
+func (w *Writer) ActiveBaseName() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.currentPath == "" {
+		return ""
+	}
+	return filepath.Base(w.currentPath)
+}
+
 // RetentionResult summarises one retention sweep.
 type RetentionResult struct {
 	Scanned    int      // sidecar index files inspected
@@ -203,7 +218,7 @@ func (w *Writer) SweepRetention(now time.Time, ttl time.Duration) (RetentionResu
 	}
 
 	cutoff := now.Add(-ttl)
-	active := w.activeBaseName()
+	active := w.ActiveBaseName()
 
 	for _, e := range entries {
 		name := e.Name()
@@ -248,16 +263,7 @@ func (w *Writer) SweepRetention(now time.Time, ttl time.Duration) (RetentionResu
 	return res, nil
 }
 
-// activeBaseName returns the base name (no extension) of the writer's
-// current Parquet file, or "" if none is open.
-func (w *Writer) activeBaseName() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.currentPath == "" {
-		return ""
-	}
-	return filepath.Base(w.currentPath)
-}
+// (activeBaseName moved to exported ActiveBaseName for use by Compactor)
 
 // openNewFile creates a fresh file + writer and resets per-file
 // accumulators. Caller must hold w.mu.

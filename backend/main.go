@@ -54,6 +54,39 @@ func retentionLoop(ctx context.Context, pw *parquet.Writer, ttl, interval time.D
 	}
 }
 
+// compactionLoop merges small sealed Parquet files into bigger ones
+// every interval. A failed compaction is logged but not fatal — the
+// next tick retries. The writer's active file is never a source.
+func compactionLoop(ctx context.Context, pw *parquet.Writer, compactor *parquet.Compactor, interval time.Duration, logger *slog.Logger) {
+	if compactor == nil || interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			active := pw.ActiveBaseName()
+			res, err := compactor.Compact(active, pw.RotateBytes())
+			if err != nil {
+				logger.Warn("compaction failed", "err", err)
+				continue
+			}
+			if res.Merged > 0 {
+				logger.Info("compaction sweep",
+					"merged", res.Merged,
+					"scanned", res.Scanned,
+					"skipped", res.Skipped,
+					"rows", res.RowsCompacted,
+					"bytes_freed", res.BytesFreed,
+				)
+			}
+		}
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
@@ -78,6 +111,8 @@ func run(logger *slog.Logger) error {
 		"shutdown_timeout", cfg.ShutdownTimeout,
 		"retention", cfg.Retention,
 		"retention_interval", cfg.RetentionInterval,
+		"compaction_interval", cfg.CompactionInterval,
+		"compaction_max_file_bytes", cfg.CompactionMaxFileBytes,
 	)
 
 	pw, err := parquet.New(cfg.ParquetDir, parquet.FlushOptions{
@@ -123,6 +158,13 @@ func run(logger *slog.Logger) error {
 	go func() {
 		defer wg.Done()
 		retentionLoop(rootCtx, pw, cfg.Retention, cfg.RetentionInterval, logger)
+	}()
+
+	compactor := parquet.NewCompactor(cfg.ParquetDir, cfg.CompactionMaxFileBytes)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		compactionLoop(rootCtx, pw, compactor, cfg.CompactionInterval, logger)
 	}()
 
 	wg.Add(1)

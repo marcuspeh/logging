@@ -15,36 +15,40 @@ import (
 
 // Config holds the runtime configuration for the logging-backend service.
 type Config struct {
-	KafkaBrokers       []string
-	KafkaTopic         string
-	KafkaGroupID       string
-	ParquetDir         string
-	ParquetRotateBytes int64
-	ParquetRotateEvery time.Duration
-	ParquetFlushRows   int64
-	ParquetFlushEvery  time.Duration
-	HTTPAddr           string
-	ShutdownTimeout    time.Duration
-	Retention          time.Duration
-	RetentionInterval  time.Duration
+	KafkaBrokers           []string
+	KafkaTopic             string
+	KafkaGroupID           string
+	ParquetDir             string
+	ParquetRotateBytes     int64
+	ParquetRotateEvery     time.Duration
+	ParquetFlushRows       int64
+	ParquetFlushEvery      time.Duration
+	HTTPAddr               string
+	ShutdownTimeout        time.Duration
+	Retention              time.Duration
+	RetentionInterval      time.Duration
+	CompactionInterval     time.Duration
+	CompactionMaxFileBytes int64
 }
 
 // Defaults returns the default configuration used when no env overrides are
 // provided.
 func Defaults() Config {
 	return Config{
-		KafkaBrokers:       []string{"localhost:9092"},
-		KafkaTopic:         "logs",
-		KafkaGroupID:       "logging-collector",
-		ParquetDir:         "/data/parquet",
-		ParquetRotateBytes: 128 * 1024 * 1024,
-		ParquetRotateEvery: 5 * time.Minute,
-		ParquetFlushRows:   1024,
-		ParquetFlushEvery:  5 * time.Second,
-		HTTPAddr:           ":8080",
-		ShutdownTimeout:    10 * time.Second,
-		Retention:          14 * 24 * time.Hour,
-		RetentionInterval:  1 * time.Hour,
+		KafkaBrokers:           []string{"localhost:9092"},
+		KafkaTopic:             "logs",
+		KafkaGroupID:           "logging-collector",
+		ParquetDir:             "/data/parquet",
+		ParquetRotateBytes:     128 * 1024 * 1024,
+		ParquetRotateEvery:     5 * time.Minute,
+		ParquetFlushRows:       1024,
+		ParquetFlushEvery:      5 * time.Second,
+		HTTPAddr:               ":8080",
+		ShutdownTimeout:        10 * time.Second,
+		Retention:              14 * 24 * time.Hour,
+		RetentionInterval:      1 * time.Hour,
+		CompactionInterval:     24 * time.Hour,
+		CompactionMaxFileBytes: 64 * 1024 * 1024,
 	}
 }
 
@@ -144,6 +148,26 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("config: RETENTION_INTERVAL must be > 0, got %s", d)
 		}
 		cfg.RetentionInterval = d
+	}
+	if v := os.Getenv("COMPACTION_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("config: COMPACTION_INTERVAL=%q is not a valid duration: %w", v, err)
+		}
+		if d <= 0 {
+			return cfg, fmt.Errorf("config: COMPACTION_INTERVAL must be > 0, got %s", d)
+		}
+		cfg.CompactionInterval = d
+	}
+	if v := os.Getenv("COMPACTION_MAX_FILE_BYTES"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return cfg, fmt.Errorf("config: COMPACTION_MAX_FILE_BYTES=%q is not a valid integer: %w", v, err)
+		}
+		if n <= 0 {
+			return cfg, fmt.Errorf("config: COMPACTION_MAX_FILE_BYTES must be > 0, got %d", n)
+		}
+		cfg.CompactionMaxFileBytes = n
 	}
 	return cfg, nil
 }
