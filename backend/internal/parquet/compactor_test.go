@@ -85,7 +85,7 @@ func TestCompactMergesSmallFiles(t *testing.T) {
 		t.Fatalf("expected non-empty active base name")
 	}
 
-	res, err := compactor.Compact(active, 1<<20)
+	res, err := compactor.Compact(func() string { return active }, 1<<20)
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestCompactSkipsOversized(t *testing.T) {
 	dropInto(t, baseName, sub, dir)
 
 	compactor := NewCompactor(dir, 1)
-	res, err := compactor.Compact("", 1<<20)
+	res, err := compactor.Compact(func() string { return "" }, 1<<20)
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestCompactSkipsActiveFile(t *testing.T) {
 
 	compactor := NewCompactor(dir, 1<<20)
 	active := w.ActiveBaseName()
-	res, err := compactor.Compact(active, 1<<20)
+	res, err := compactor.Compact(w.ActiveBaseName, 1<<20)
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestCompactIsIdempotent(t *testing.T) {
 
 	compactor := NewCompactor(dir, 1<<20)
 
-	res1, err := compactor.Compact("", 1<<20)
+	res1, err := compactor.Compact(func() string { return "" }, 1<<20)
 	if err != nil {
 		t.Fatalf("Compact #1: %v", err)
 	}
@@ -202,11 +202,120 @@ func TestCompactIsIdempotent(t *testing.T) {
 		t.Fatalf("Compact #1 Merged = %d, want 1", res1.Merged)
 	}
 
-	res2, err := compactor.Compact("", 1<<20)
+	res2, err := compactor.Compact(func() string { return "" }, 1<<20)
 	if err != nil {
 		t.Fatalf("Compact #2: %v", err)
 	}
 	if res2.Merged != 0 {
 		t.Errorf("Compact #2 Merged = %d, want 0 (idempotent)", res2.Merged)
+	}
+}
+
+func TestCompactRespectsMidRunRotation(t *testing.T) {
+	dir := t.TempDir()
+
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for _, ev := range []model.LogEvent{
+		{Timestamp: base, Project: "p", LogID: "l", Level: "INFO", Message: "x"},
+		{Timestamp: base.Add(time.Second), Project: "p", LogID: "l", Level: "INFO", Message: "x"},
+		{Timestamp: base.Add(2 * time.Second), Project: "p", LogID: "l", Level: "INFO", Message: "x"},
+	} {
+		baseName, sub := makeSealedFile(t, []model.LogEvent{ev})
+		dropInto(t, baseName, sub, dir)
+	}
+
+	candidates, _ := filepath.Glob(filepath.Join(dir, "logs-*.parquet"))
+	if len(candidates) != 3 {
+		t.Fatalf("expected 3 sealed files, got %d", len(candidates))
+	}
+
+	// Simulate a writer rotation: at first the "active" name is the
+	// first sealed file; once we've appended the third, the active
+	// name flips to the third (which was just sealed by the writer).
+	var activeCalls int
+	activeFn := func() string {
+		activeCalls++
+		switch activeCalls {
+		case 1, 2, 3, 4:
+			return filepath.Base(candidates[0])
+		default:
+			return filepath.Base(candidates[2])
+		}
+	}
+
+	compactor := NewCompactor(dir, 1<<20)
+	// Force a flush per candidate by sizing rotateBytes to the smallest
+	// file's size.
+	st, err := os.Stat(candidates[0])
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	res, err := compactor.Compact(activeFn, st.Size()+1)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	// The third file became active mid-run, so at most the first two
+	// should be merged.
+	if res.Merged > 1 {
+		t.Errorf("Merged = %d, want <=1 (mid-run rotation)", res.Merged)
+	}
+	if res.Skipped == 0 {
+		t.Errorf("Skipped = 0, want >0 (rotated-in active file should be skipped)")
+	}
+
+	// The "rotated-in" active file (candidates[2]) must still be on
+	// disk — never deleted by the compactor.
+	if _, err := os.Stat(candidates[2]); err != nil {
+		t.Errorf("newly-active file %s vanished: %v", filepath.Base(candidates[2]), err)
+	}
+}
+
+func TestCompactIsUniquePerBatch(t *testing.T) {
+	dir := t.TempDir()
+
+	// Six files in two buckets of three — produces two merged outputs.
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 6; i++ {
+		ev := model.LogEvent{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Project:   "p", LogID: "l", Level: "INFO", Message: "x",
+		}
+		baseName, sub := makeSealedFile(t, []model.LogEvent{ev})
+		dropInto(t, baseName, sub, dir)
+	}
+
+	compactor := NewCompactor(dir, 1<<20)
+	st, err := os.Stat(filepath.Join(dir, "logs-x.parquet")) // dummy to get stat API
+	if err == nil {
+		_ = st
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "logs-*.parquet"))
+	if len(files) == 0 {
+		t.Fatalf("no sealed files")
+	}
+	st2, _ := os.Stat(files[0])
+
+	// rotateBytes very small → every 2-3 files forms a new batch.
+	res, err := compactor.Compact(func() string { return "" }, st2.Size()*2+1)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.Merged < 2 {
+		t.Errorf("Merged = %d, want >= 2 (should produce multiple batches)", res.Merged)
+	}
+
+	cFiles, _ := filepath.Glob(filepath.Join(dir, "compact-*.parquet"))
+	if len(cFiles) != res.Merged {
+		t.Errorf("merged file count = %d, want %d", len(cFiles), res.Merged)
+	}
+
+	// All compact-* filenames must be distinct.
+	seen := make(map[string]struct{})
+	for _, f := range cFiles {
+		if _, ok := seen[filepath.Base(f)]; ok {
+			t.Errorf("duplicate compact output: %s", f)
+		}
+		seen[filepath.Base(f)] = struct{}{}
 	}
 }

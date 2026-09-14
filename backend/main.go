@@ -49,6 +49,11 @@ func retentionLoop(ctx context.Context, pw *parquet.Writer, ttl, interval time.D
 					"scanned", res.Scanned,
 					"bytes_freed", res.BytesFreed,
 				)
+			} else if res.Scanned > 0 {
+				logger.Debug("retention sweep: nothing to delete",
+					"scanned", res.Scanned,
+					"skipped", res.Skipped,
+				)
 			}
 		}
 	}
@@ -68,8 +73,7 @@ func compactionLoop(ctx context.Context, pw *parquet.Writer, compactor *parquet.
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			active := pw.ActiveBaseName()
-			res, err := compactor.Compact(active, pw.RotateBytes())
+			res, err := compactor.Compact(pw.ActiveBaseName, pw.RotateBytes())
 			if err != nil {
 				logger.Warn("compaction failed", "err", err)
 				continue
@@ -81,6 +85,11 @@ func compactionLoop(ctx context.Context, pw *parquet.Writer, compactor *parquet.
 					"skipped", res.Skipped,
 					"rows", res.RowsCompacted,
 					"bytes_freed", res.BytesFreed,
+				)
+			} else if res.Scanned > 0 {
+				logger.Debug("compaction sweep: nothing to merge",
+					"scanned", res.Scanned,
+					"skipped", res.Skipped,
 				)
 			}
 		}

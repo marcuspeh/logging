@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,10 +63,11 @@ type CompactResult struct {
 // Compact scans dir for sealed files smaller than maxFileBytes and
 // groups them into batches by approximate total size (rotateBytes), then
 // writes one merged file per batch. Returns immediately if no
-// candidates are found. `active` is the base name of the writer's
-// current Parquet file (or "" if none) and must be excluded from
-// compaction.
-func (c *Compactor) Compact(active string, rotateBytes int64) (CompactResult, error) {
+// candidates are found. `activeFn` returns the base name of the writer's
+// current Parquet file (or "" if none) — it's called before every batch
+// flush so a writer rotation mid-compaction is observed. The active
+// name is never used as a compaction source.
+func (c *Compactor) Compact(activeFn func() string, rotateBytes int64) (CompactResult, error) {
 	var res CompactResult
 
 	if rotateBytes <= 0 {
@@ -79,11 +81,45 @@ func (c *Compactor) Compact(active string, rotateBytes int64) (CompactResult, er
 
 	var batch []compactCandidate
 	batchBytes := int64(0)
+	leftover := []string{}
+
+	// freshenActive asks the writer (under its own mutex) which file is
+	// currently being written. The active name is never a compaction
+	// source. Re-evaluated before every batch flush so a writer rotation
+	// mid-compaction doesn't leave the new active file eligible.
+	freshenActive := func() string {
+		if activeFn == nil {
+			return ""
+		}
+		return activeFn()
+	}
 
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
+		// Re-check the active file right before we touch the merged
+		// output — the writer may have rotated while we were scanning.
+		active := freshenActive()
+
+		// Drop any source whose name now equals the active file
+		// (writer rotated and now we're about to delete a live file).
+		filtered := batch[:0]
+		for _, src := range batch {
+			if src.base == active {
+				leftover = append(leftover, src.base)
+				continue
+			}
+			filtered = append(filtered, src)
+		}
+		batch = filtered
+		if len(batch) < 2 {
+			// Single (or zero) non-active candidates — nothing to merge.
+			batch = batch[:0]
+			batchBytes = 0
+			return nil
+		}
+
 		merged, rows, err := c.mergeBatch(batch)
 		if err != nil {
 			return err
@@ -121,11 +157,18 @@ func (c *Compactor) Compact(active string, rotateBytes int64) (CompactResult, er
 		res.Scanned++
 
 		base := strings.TrimSuffix(name, idxSuffix)
-		if base == active {
+		if base == freshenActive() {
 			res.Skipped++
 			continue
 		}
 		if strings.HasPrefix(base, compactPrefix) {
+			res.Skipped++
+			continue
+		}
+		// Re-check the active file once more right before we commit
+		// to merging it. The writer may have rotated between the
+		// initial filter above and now.
+		if base == freshenActive() {
 			res.Skipped++
 			continue
 		}
@@ -163,6 +206,9 @@ func (c *Compactor) Compact(active string, rotateBytes int64) (CompactResult, er
 	}
 	if err := flush(); err != nil {
 		return res, err
+	}
+	if len(leftover) > 0 {
+		res.Skipped += len(leftover)
 	}
 	return res, nil
 }
@@ -226,7 +272,8 @@ func (c *Compactor) mergeBatch(batch []compactCandidate) (bool, int64, error) {
 	})
 
 	now := time.Now().UTC()
-	outName := fmt.Sprintf("%s%d-%04d.parquet", compactPrefix, now.Unix(), 0)
+	seq := nextCompactSeq(c.dir, now.Unix())
+	outName := fmt.Sprintf("%s%d-%04d.parquet", compactPrefix, now.Unix(), seq)
 	outPath := filepath.Join(c.dir, outName)
 	tmpPath := outPath + ".tmp"
 
@@ -279,4 +326,36 @@ func (c *Compactor) mergeBatch(batch []compactCandidate) (bool, int64, error) {
 		return false, 0, err
 	}
 	return true, int64(len(rows)), nil
+}
+
+// nextCompactSeq scans dir for the highest sequence suffix used by
+// files matching `<compactPrefix><unix>-NNNN.parquet` and returns the
+// next free sequence. Returns 0 when the directory contains no
+// compacted files for this second.
+func nextCompactSeq(dir string, unix int64) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	prefix := fmt.Sprintf("%s%d-", compactPrefix, unix)
+	best := -1
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".parquet") {
+			continue
+		}
+		mid := strings.TrimPrefix(name, prefix)
+		mid = strings.TrimSuffix(mid, ".parquet")
+		n, err := strconv.Atoi(mid)
+		if err != nil {
+			continue
+		}
+		if n > best {
+			best = n
+		}
+	}
+	if best < 0 {
+		return 0
+	}
+	return best + 1
 }
