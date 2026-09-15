@@ -35,6 +35,38 @@ func TestDecodeValid(t *testing.T) {
 	}
 }
 
+func TestDecodeEmptyCallerIsFine(t *testing.T) {
+	// A SDK with caller capture disabled emits "" explicitly. The
+	// decoder must accept it and the field round-trips to "".
+	body := []byte(`{"timestamp":"2026-09-06T10:00:00Z","project":"p","logid":"l","level":"INFO","message":"m","caller":""}`)
+	ev, err := Decode(body)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if ev.Caller != "" {
+		t.Errorf("Caller = %q, want \"\"", ev.Caller)
+	}
+}
+
+func TestDecodeRoundTripsCaller(t *testing.T) {
+	ts := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
+	body, _ := json.Marshal(model.LogEvent{
+		Timestamp: ts,
+		Project:   "billing",
+		LogID:     "req-1",
+		Level:     "INFO",
+		Message:   "ok",
+		Caller:    "checkout.go:42",
+	})
+	ev, err := Decode(body)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if ev.Caller != "checkout.go:42" {
+		t.Errorf("Caller = %q, want %q", ev.Caller, "checkout.go:42")
+	}
+}
+
 func TestDecodeBackfillsTimestamp(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{
 		"project": "p", "logid": "l", "level": "INFO", "message": "m",

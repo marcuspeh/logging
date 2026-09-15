@@ -39,13 +39,16 @@ func (o Order) String() string {
 	return "desc"
 }
 
-// ResultRow is the JSON shape returned to clients.
+// ResultRow is the JSON shape returned to clients. Caller carries
+// the SDK-resolved "file:LINE" of the call site, or "" when caller
+// capture is disabled.
 type ResultRow struct {
 	Timestamp time.Time `json:"timestamp"`
 	Project   string    `json:"project"`
 	LogID     string    `json:"logid"`
 	Level     string    `json:"level"`
 	Message   string    `json:"message"`
+	Caller    string    `json:"caller"`
 }
 
 // Response is the envelope around a list of ResultRows.
@@ -146,6 +149,7 @@ func (e *Engine) Execute(q Query) (Response, error) {
 			LogID:     ev.LogID,
 			Level:     ev.Level,
 			Message:   ev.Message,
+			Caller:    ev.Caller,
 		})
 	}
 	return resp, nil

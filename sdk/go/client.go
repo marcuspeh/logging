@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +46,18 @@ type Client struct {
 	sent    atomic.Int64
 	failed  atomic.Int64
 }
+
+// callerSkip is the fixed number of stack frames between the user's
+// call site (e.g. c.Info, c.Warn, c.Error) and the SDK's resolveCaller
+// function. Chain:
+//
+//	user code (c.Info/c.Warn/c.Error) → Log → resolveCaller →
+//	runtime.Caller
+//
+// Three frames sit between resolveCaller and the user's call: Log (1),
+// the level helper (2), user code (3). If the caller wraps the SDK
+// itself, drop one frame or contact the maintainer.
+const callerSkip = 3
 
 type asyncItem struct {
 	topic   string
@@ -129,6 +143,7 @@ func (c *Client) Log(ctx context.Context, level Level, message string, args ...a
 		LogID:     logidFromCtx(ctx),
 		Level:     level.String(),
 		Message:   formatMessage(message, args),
+		Caller:    c.resolveCaller(),
 	})
 	if err != nil {
 		fmt.Printf("loggingsdk: encode: %v\n", err)
@@ -136,6 +151,18 @@ func (c *Client) Log(ctx context.Context, level Level, message string, args ...a
 	}
 
 	return c.publish(ctx, "logs", []byte(c.project), payload)
+}
+
+// resolveCaller returns the "file.go:LINE" of the user's call to
+// Info/Warn/Error/etc., or "" when runtime.Caller fails. Caller capture
+// is always on; if you wrap the SDK the captured line may shift and
+// you'll need to edit `callerSkip` above.
+func (c *Client) resolveCaller() string {
+	_, file, line, ok := runtime.Caller(callerSkip)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", filepath.Base(file), line)
 }
 
 func (c *Client) Debug(ctx context.Context, format string, args ...any) {
@@ -249,6 +276,7 @@ type event struct {
 	LogID     string    `json:"logid"`
 	Level     string    `json:"level"`
 	Message   string    `json:"message"`
+	Caller    string    `json:"caller"`
 }
 
 func encodeEvent(e event) ([]byte, error) { return json.Marshal(e) }

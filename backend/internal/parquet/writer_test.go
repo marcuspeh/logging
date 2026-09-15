@@ -302,6 +302,73 @@ func TestSweepRetentionNeverDeletesActive(t *testing.T) {
 	}
 }
 
+// TestOldSchemaParquetRoundTrip writes a Parquet file with the
+// pre-caller schema (no "caller" column) and asserts the new code can
+// read it back with Caller == "". This is the on-disk half of the
+// backward-compatibility contract: a backend running the new code
+// must not error when a Parquet file from an older backend lands on
+// disk via restore/upgrade.
+func TestOldSchemaParquetRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old-schema.parquet")
+
+	// Use a local struct that mirrors model.LogEvent but WITHOUT
+	// the Caller column. parquet-go will materialise a file with
+	// a 5-column schema.
+	type oldEvent struct {
+		Timestamp time.Time `parquet:"timestamp"`
+		Project   string    `parquet:"project"`
+		LogID     string    `parquet:"logid"`
+		Level     string    `parquet:"level"`
+		Message   string    `parquet:"message"`
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	pw := parquet.NewGenericWriter[oldEvent](f)
+	ts := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := pw.Write([]oldEvent{
+		{Timestamp: ts, Project: "billing", LogID: "r1", Level: "INFO", Message: "hi"},
+	}); err != nil {
+		t.Fatalf("write old-schema: %v", err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("file close: %v", err)
+	}
+
+	// Read it back with the new model.LogEvent (which has Caller).
+	rf, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer rf.Close()
+	st, err := rf.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	rows, err := parquet.Read[model.LogEvent](rf, st.Size())
+	if err != nil {
+		// Some versions of parquet-go reject missing columns
+		// outright. Surface that as a clear failure rather than
+		// letting it masquerade as a different bug.
+		t.Fatalf("read new-schema over old-schema file: %v (parquet-go missing-column path)", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].Caller != "" {
+		t.Errorf("Caller = %q, want \"\" for old-schema row", rows[0].Caller)
+	}
+	if rows[0].Message != "hi" || rows[0].Project != "billing" {
+		t.Errorf("row payload mismatch: %+v", rows[0])
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

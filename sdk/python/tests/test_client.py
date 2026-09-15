@@ -272,3 +272,27 @@ def test_logging_handler_falls_back_to_unknown_when_unset(fake: FakeProducer):
 
     body = json.loads(fake.messages[0][2])
     assert body["logid"] == "unknown"
+
+
+# ---- Caller capture -----------------------------------------------------
+
+
+def test_info_captures_caller(fake: FakeProducer):
+    c = Client("k:9092", "p", producer=fake)
+    c.info("hi")
+    body = json.loads(fake.messages[0][2])
+    # caller is always present and must look like "file.ext:LINE".
+    caller = body.get("caller", "")
+    assert caller, "caller should be populated"
+    fname, _, line = caller.rpartition(":")
+    assert fname and line.isdigit(), f"caller {caller!r} does not look like file:LINE"
+
+
+def test_caller_always_present_in_json(fake: FakeProducer):
+    # The "caller" key must always appear in the wire payload,
+    # even when the resolved caller is empty (rare in practice —
+    # when inspect.stack() can't resolve any frame).
+    c = Client("k:9092", "p", producer=fake)
+    c.info("hi")
+    body = json.loads(fake.messages[0][2])
+    assert "caller" in body

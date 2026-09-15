@@ -1,8 +1,10 @@
 package loggingsdk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,7 +62,7 @@ func TestEventShape(t *testing.T) {
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, k := range []string{"timestamp", "project", "logid", "level", "message"} {
+	for _, k := range []string{"timestamp", "project", "logid", "level", "message", "caller"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("encoded payload missing %q: %v", k, got)
 		}
@@ -83,7 +85,7 @@ func TestLevelStringRoundTrip(t *testing.T) {
 		}
 	}
 	if _, ok := ParseLevel("bogus"); ok {
-		t.Error("ParseLevel(bogus) should fail")
+		t.Error("ParseLevel(\"bogus\") should fail")
 	}
 }
 
@@ -154,5 +156,68 @@ func TestWithLogID(t *testing.T) {
 	ctx := WithLogID(context.Background(), "abc")
 	if got := ctx.Value(LogIDKey); got != "abc" {
 		t.Errorf("ctx.Value = %v, want abc", got)
+	}
+}
+
+func TestCallerIsAutoCaptured(t *testing.T) {
+	c, _ := New("k:9092", "p")
+	defer c.Close()
+
+	// The fixed callerSkip is tuned for the production chain
+	// `user → Info → Log → resolveCaller`. We can't run that chain
+	// without a working broker, so we just verify resolveCaller
+	// produces a string of the expected shape — the production path
+	// will walk one frame further up to the user's call site.
+	got := c.resolveCaller()
+	if got == "" {
+		t.Fatalf("expected non-empty caller")
+	}
+	if !looksLikeFileLine(got) {
+		t.Errorf("caller %q does not look like \"file:LINE\"", got)
+	}
+}
+
+// looksLikeFileLine returns true when s ends in ":NNN" (one or more
+// digits) and contains a "." before that suffix — i.e. the canonical
+// "file.ext:LINE" form produced by fmt.Sprintf("%s:%d", ...).
+func looksLikeFileLine(s string) bool {
+	if s == "" {
+		return false
+	}
+	colon := strings.LastIndexByte(s, ':')
+	if colon < 0 || colon == len(s)-1 {
+		return false
+	}
+	for _, r := range s[colon+1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return strings.Contains(s[:colon], ".")
+}
+
+func TestCallerIsAlwaysPresentInJSON(t *testing.T) {
+	// "caller" is a required field on every event. The key must
+	// appear in the encoded payload for both populated and empty
+	// values so consumers can rely on its presence.
+	for _, c := range []string{"", "client_test.go:1"} {
+		payload, err := encodeEvent(event{
+			Timestamp: time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC),
+			Project:   "p",
+			LogID:     "l",
+			Level:     "INFO",
+			Message:   "m",
+			Caller:    c,
+		})
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		if !bytes.Contains(payload, []byte(`"caller"`)) {
+			t.Errorf("caller key missing for Caller=%q: %s", c, payload)
+		}
+		want := []byte(`"caller":"` + c + `"`)
+		if !bytes.Contains(payload, want) {
+			t.Errorf("payload missing %q: %s", want, payload)
+		}
 	}
 }

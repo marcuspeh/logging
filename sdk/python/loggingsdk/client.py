@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import inspect
 import json
 import queue
 import threading
@@ -116,7 +117,13 @@ class Client:
     def log(self, level: Level, message: str, *args: Any) -> None:
         if level < self._min_level:
             return
-        payload = self._encode(level, current_log_id(), message, args)
+        payload = self._encode(
+            level,
+            current_log_id(),
+            message,
+            args,
+            caller=self._resolve_caller(),
+        )
         self._dispatch(payload)
 
     def debug(self, message: str, *args: Any) -> None:
@@ -147,20 +154,54 @@ class Client:
             self._worker = None
         drain(self._producer, timeout)
 
-    def _encode(self, level: Level, logid: str, message: str, args: tuple[Any, ...]) -> bytes:
+    def _encode(
+        self,
+        level: Level,
+        logid: str,
+        message: str,
+        args: tuple[Any, ...],
+        *,
+        caller: str = "",
+    ) -> bytes:
         if args:
             try:
                 message = message % args
             except Exception:  # pragma: no cover - malformed format
                 pass
-        ev = {
+        ev: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "project": self._project,
             "logid": logid,
             "level": str(level),
             "message": message,
+            "caller": caller,
         }
         return json.dumps(ev, separators=(",", ":")).encode("utf-8")
+
+    def _resolve_caller(self) -> str:
+        """Return ``"<file>:<line>"`` for the caller's site, or ``""``.
+
+        ``inspect.stack`` is the standard way to walk the Python stack
+        for caller info. The fixed offset assumes the production call
+        shape::
+
+            user code → level helper (info/debug/...) → Client.log →
+            Client._resolve_caller → inspect.stack
+
+        Three frames sit between ``_resolve_caller`` and the user's
+        caller: ``log`` (1), the level helper (2), user code (3).
+        """
+        try:
+            frame_info = inspect.stack()[3]
+        except IndexError:
+            return ""
+        frame = frame_info.frame
+        filename = frame_info.filename
+        lineno = frame_info.lineno
+        if not filename:
+            co_filename = frame.f_code.co_filename if frame else None
+            filename = co_filename or "<unknown>"
+        return "{}:{}".format(filename.rsplit("/", 1)[-1], lineno)
 
     def _dispatch(self, payload: bytes) -> None:
         if self._async_capacity > 0 and self._queue is not None:
