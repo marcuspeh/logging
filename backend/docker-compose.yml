@@ -24,6 +24,7 @@
 
 services:
   kafka:
+    restart: unless-stopped
     container_name: logging-kafka
     image: apache/kafka:3.9.1
     networks:
@@ -56,6 +57,7 @@ services:
       - /home/marcuspeh/data/logging-system/kafka:/var/lib/kafka/data
 
   collector:
+    restart: unless-stopped
     container_name: logging-collector
     build:
       context: .
