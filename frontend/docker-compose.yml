@@ -1,0 +1,19 @@
+# Frontend for the logging system.
+#
+# Exposed on host port 7765. The browser talks directly to the backend
+# collector (default http://localhost:4665) — CORS on the backend will be
+# configured separately.
+#
+# Run from frontend/:  docker compose up -d --build
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4665}
+    container_name: logging-frontend
+    restart: unless-stopped
+    ports:
+      - "7765:3000"
