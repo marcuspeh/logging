@@ -1,19 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { searchLogs } from "../api/logs";
 import type { LogQueryResponse, QueryParams } from "../api/types";
 import { fromSearchParams, toSearchParams } from "../utils/url";
 
-// useSearch keeps QueryParams as the single source of truth, syncs them
-// to the URL (so views are shareable + back-button works), and exposes a
-// TanStack Query bound to those params.
+// useSearch keeps QueryParams as the single source of truth for the
+// *executed* query, syncs them to the URL (so views are shareable +
+// back-button works), and exposes a TanStack Query bound to those
+// params. Free-text fields (project, logid) live in a separate `draft`
+// so the query only fires when the user commits via Enter / Search.
 export function useSearch() {
   // Hydrate initial params from the URL once.
   const initial = useMemo(() => fromSearchParams(window.location.search), []);
+
+  // draft: what the inputs currently show. params: what the next query
+  // will run against. They diverge while the user is typing.
   const [params, setParams] = useState<QueryParams>(initial);
+  const [draft, setDraft] = useState<QueryParams>(initial);
 
   // Reflect params into the URL whenever they change. We use replaceState
-  // (not push) for in-flight typing so the back button isn't polluted.
+  // (not push) so the back button isn't polluted by every keystroke.
   useEffect(() => {
     const sp = toSearchParams(params);
     const qs = sp.toString();
@@ -33,21 +39,35 @@ export function useSearch() {
     retry: 1,
   });
 
-  // Debounced setter for free-text fields (logid). Cancels any pending
-  // update on rapid re-entry so only the latest value is applied.
-  const pendingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const setDebounced = useCallback(
-    (patch: Partial<QueryParams>, delayMs = 250) => {
-      if (pendingRef.current) clearTimeout(pendingRef.current);
-      pendingRef.current = setTimeout(() => {
-        pendingRef.current = null;
-        setParams((prev: QueryParams) => ({ ...prev, ...patch }));
-      }, delayMs);
-    },
-    [],
-  );
+  // Commit the current draft into params (triggers a fetch if enabled).
+  const commit = useCallback(() => setParams(draft), [draft]);
 
-  const reset = useCallback(() => setParams({}), []);
+  // Apply a patch to BOTH draft and params — used by non-text controls
+  // (level, time range, limit, order) where we want an immediate query.
+  const apply = useCallback((patch: Partial<QueryParams>) => {
+    setDraft((prev) => ({ ...prev, ...patch }));
+    setParams((prev) => ({ ...prev, ...patch }));
+  }, []);
 
-  return { params, setParams, setDebounced, reset, query, enabled };
+  // Update only the draft — used by free-text inputs (project, logid)
+  // that fire a query on Enter / Search, not on every keystroke.
+  const updateDraft = useCallback((patch: Partial<QueryParams>) => {
+    setDraft((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const reset = useCallback(() => {
+    setParams({});
+    setDraft({});
+  }, []);
+
+  return {
+    draft,
+    params,
+    commit,
+    apply,
+    updateDraft,
+    reset,
+    query,
+    enabled,
+  };
 }

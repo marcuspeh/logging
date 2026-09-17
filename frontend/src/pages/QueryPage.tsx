@@ -7,27 +7,31 @@ import { useSearch } from "../hooks/useSearch";
 import { extractErrorMessage } from "../api/client";
 
 // QueryPage is the only screen for now. It composes the filter panel
-// and results table around the URL-synced useSearch hook.
+// and results table around the URL-synced useSearch hook. Free-text
+// fields (project, logid) only commit on Enter / Search; structural
+// filters apply immediately.
 export function QueryPage() {
-  const { params, setParams, setDebounced, reset, query, enabled } = useSearch();
+  const { draft, params, commit, apply, updateDraft, reset, query, enabled } =
+    useSearch();
   const rows = query.data?.results ?? [];
   const count = query.data?.count ?? 0;
 
-  // Search button is a no-op for now (filters are reactive), but having
-  // it means the UI matches the original plan and is keyboard-friendly.
-  const onSubmit = () => {
-    /* queries are auto-driven by useSearch; explicit submit kept for a11y */
+  // Click-to-filter on a result row's logid: stamp both draft and params
+  // immediately so the filtered view renders without needing Enter.
+  const onPickLogId = (logid: string) => {
+    apply({ ...draft, logid });
   };
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
       <aside>
         <FilterPanel
+          draft={draft}
           params={params}
-          onChange={setParams}
-          onDebounced={setDebounced}
+          onUpdateDraft={updateDraft}
+          onApply={apply}
           onReset={reset}
-          onSubmit={onSubmit}
+          onCommit={commit}
           isFetching={query.isFetching}
           enabled={enabled}
         />
@@ -48,7 +52,7 @@ export function QueryPage() {
                 </span>
               )
             ) : (
-              <span className="text-slate-500">Enter a filter to search.</span>
+              <span className="text-slate-500">Enter a filter and press Enter to search.</span>
             )}
           </div>
           {enabled ? (
@@ -82,16 +86,13 @@ export function QueryPage() {
         ) : null}
 
         {enabled && rows.length > 0 ? (
-          <ResultsTable
-            rows={rows}
-            onPickLogId={(logid) => setParams({ ...params, logid })}
-          />
+          <ResultsTable rows={rows} onPickLogId={onPickLogId} />
         ) : null}
 
         {!enabled ? (
           <EmptyState
             title="Start by filtering"
-            hint="Provide a project name or a log id to query the backend."
+            hint="Type a project name or a log id, then press Enter."
           />
         ) : null}
       </section>
