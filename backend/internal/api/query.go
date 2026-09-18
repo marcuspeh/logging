@@ -2,13 +2,19 @@ package api
 
 import (
 	"container/heap"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
-	"github.com/parquet-go/parquet-go"
+	parquetgo "github.com/parquet-go/parquet-go"
 
 	"github.com/marcuspeh/logging-backend/internal/model"
+	"github.com/marcuspeh/logging-backend/internal/parquet"
 )
 
 // Query holds the parsed query parameters (PLAN §6).
@@ -81,13 +87,26 @@ func (h *rowHeap) Pop() interface{} {
 // Engine runs queries across an IndexLoader.
 type Engine struct {
 	loader *IndexLoader
+	logger *slog.Logger
 }
 
 // NewEngine constructs an Engine bound to a loader.
-func NewEngine(loader *IndexLoader) *Engine { return &Engine{loader: loader} }
+func NewEngine(loader *IndexLoader, logger *slog.Logger) *Engine {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Engine{loader: loader, logger: logger}
+}
 
 // Execute runs q, returning up to q.Limit rows. Either q.Project or q.LogID
 // must be non-empty.
+//
+// Parquet files that fail to open or read are logged and skipped rather
+// than aborting the whole query — a single truncated / mid-rotation file
+// shouldn't block every other project from being searchable. After a
+// skip we also reload the index in the background so the bad entry is
+// dropped from future queries (the writer may not have finished flushing
+// it yet).
 func (e *Engine) Execute(q Query) (Response, error) {
 	entries := e.loader.Filter(q)
 	if len(entries) == 0 {
@@ -95,12 +114,25 @@ func (e *Engine) Execute(q Query) (Response, error) {
 	}
 
 	cursors := make([]cursor, 0, len(entries))
+	skipped := make([]string, 0)
 	for _, ent := range entries {
 		rows, err := readParquetRows(ent.Path)
 		if err != nil {
-			return Response{}, err
+			e.logger.Warn("skipping unreadable parquet file", "path", ent.Path, "err", err)
+			skipped = append(skipped, ent.Path)
+			continue
 		}
 		cursors = append(cursors, cursor{rows: rows})
+	}
+	if len(skipped) > 0 {
+		// Refresh the index so the bad entries stop being served. A
+		// writer still flushing them will re-add them once the file
+		// is valid; the IndexLoader validator catches that case.
+		go func() {
+			if err := e.loader.Reload(); err != nil {
+				e.logger.Warn("index reload after skip", "err", err)
+			}
+		}()
 	}
 
 	limit := q.Limit
@@ -161,7 +193,14 @@ type cursor struct {
 
 // readParquetRows decodes all rows from a Parquet file. parquet-go applies
 // dictionary + page filtering where possible.
+//
+// A quick magic-bytes check runs first; if the file is truncated or
+// hasn't been flushed yet, parquet-go would otherwise return the
+// cryptic "EOF" / "magic header" error we'd otherwise propagate.
 func readParquetRows(path string) ([]model.LogEvent, error) {
+	if err := parquet.Validate(path); err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -171,7 +210,16 @@ func readParquetRows(path string) ([]model.LogEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parquet.Read[model.LogEvent](f, st.Size())
+	rows, err := parquetgo.Read[model.LogEvent](f, st.Size())
+	if err != nil {
+		// Convert any "EOF" / "magic" errors from parquet-go into our
+		// sentinel so the caller can decide to skip rather than fail.
+		if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "magic") {
+			return nil, fmt.Errorf("%w: %v", parquet.ErrFileUnreadable, err)
+		}
+		return nil, err
+	}
+	return rows, nil
 }
 
 // rowMatches applies the per-row filters the index can't fully enforce.

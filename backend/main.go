@@ -145,7 +145,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	loader, err := api.NewIndexLoader(cfg.ParquetDir)
+	loader, err := api.NewIndexLoader(cfg.ParquetDir, logger.With("component", "api"))
 	if err != nil {
 		_ = pw.Close()
 		return err

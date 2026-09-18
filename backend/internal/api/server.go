@@ -27,7 +27,7 @@ func NewServer(loader *IndexLoader, logger *slog.Logger) *Server {
 	}
 	return &Server{
 		loader: loader,
-		engine: NewEngine(loader),
+		engine: NewEngine(loader, logger),
 		logger: logger,
 	}
 }

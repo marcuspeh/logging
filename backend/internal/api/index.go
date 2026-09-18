@@ -10,6 +10,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,15 +32,19 @@ type IndexEntry struct {
 // IndexLoader scans a directory for *.parquet.idx.json sidecars, parses
 // them, and serves them from an in-memory cache. Reload() refreshes it.
 type IndexLoader struct {
-	dir string
+	dir    string
+	logger *slog.Logger
 
 	mu      sync.RWMutex
 	entries []IndexEntry
 }
 
 // NewIndexLoader creates a loader and performs an initial Load.
-func NewIndexLoader(dir string) (*IndexLoader, error) {
-	l := &IndexLoader{dir: dir}
+func NewIndexLoader(dir string, logger *slog.Logger) (*IndexLoader, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	l := &IndexLoader{dir: dir, logger: logger}
 	if err := l.Reload(); err != nil {
 		return nil, err
 	}
@@ -76,6 +81,14 @@ func (l *IndexLoader) Reload() error {
 		var idx parquet.Index
 		if err := json.Unmarshal(data, &idx); err != nil {
 			return fmt.Errorf("api: parse %s: %w", idxPath, err)
+		}
+		// Skip sidecars whose parquet file is missing, zero-bytes, or
+		// missing the PAR1 magic markers. The writer hadn't finished
+		// flushing or the file got truncated; either way the query
+		// engine would hit EOF trying to read it.
+		if err := parquet.Validate(pqPath); err != nil {
+			l.logger.Warn("skipping unreadable parquet file", "path", pqPath, "err", err)
+			continue
 		}
 		entries = append(entries, IndexEntry{Index: idx, Path: pqPath})
 	}

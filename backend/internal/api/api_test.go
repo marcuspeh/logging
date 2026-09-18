@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -47,7 +49,7 @@ func TestIndexLoaderRoundTrip(t *testing.T) {
 	}
 	writeFixture(t, dir, events, 1<<20)
 
-	loader, err := NewIndexLoader(dir)
+	loader, err := NewIndexLoader(dir, nil)
 	if err != nil {
 		t.Fatalf("NewIndexLoader: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestIndexLoaderFiltersByProject(t *testing.T) {
 		makeEvent(base, "beta", "x", "INFO", "b1"),
 	}, 1<<20)
 
-	loader, _ := NewIndexLoader(dir)
+	loader, _ := NewIndexLoader(dir, nil)
 	got := loader.Filter(Query{Project: "alpha"})
 	if len(got) != 1 {
 		t.Fatalf("expected 1 entry for alpha, got %d", len(got))
@@ -92,7 +94,7 @@ func TestIndexLoaderFiltersByTime(t *testing.T) {
 		makeEvent(base, "p", "x", "INFO", "jan"),
 	}, 1<<20)
 
-	loader, _ := NewIndexLoader(dir)
+	loader, _ := NewIndexLoader(dir, nil)
 	all := loader.Entries()
 	if len(all) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(all))
@@ -124,8 +126,8 @@ func TestQueryEndToEnd(t *testing.T) {
 	}
 	writeFixture(t, dir, events, 1<<20)
 
-	loader, _ := NewIndexLoader(dir)
-	engine := NewEngine(loader)
+	loader, _ := NewIndexLoader(dir, nil)
+	engine := NewEngine(loader, nil)
 
 	resp, err := engine.Execute(Query{Project: "billing"})
 	if err != nil {
@@ -174,8 +176,8 @@ func TestQueryNoMatches(t *testing.T) {
 	writeFixture(t, dir, []model.LogEvent{
 		makeEvent(time.Now(), "p", "x", "INFO", "m"),
 	}, 1<<20)
-	loader, _ := NewIndexLoader(dir)
-	engine := NewEngine(loader)
+	loader, _ := NewIndexLoader(dir, nil)
+	engine := NewEngine(loader, nil)
 	resp, err := engine.Execute(Query{LogID: "no-such-id"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -188,13 +190,52 @@ func TestQueryNoMatches(t *testing.T) {
 	}
 }
 
+// TestQuerySkipsCorruptParquet ensures a truncated parquet file in the
+// index does not fail the whole query. This is the regression test for
+// the "EOF reading magic header" error users saw when the collector was
+// killed mid-rotation: the writer leaves a partial file with a sidecar,
+// and the query engine must skip it instead of returning 500.
+func TestQuerySkipsCorruptParquet(t *testing.T) {
+	dir := t.TempDir()
+
+	// One good file with a real project entry.
+	base := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	writeFixture(t, dir, []model.LogEvent{
+		makeEvent(base, "billing", "req-1", "INFO", "ok"),
+	}, 1<<20)
+
+	// Plant a corrupt sidecar + zero-byte parquet file. Reload() will
+	// reject it via parquet.Validate, so the loader never sees it.
+	corruptBase := "logs-corrupt-test.parquet"
+	if err := os.WriteFile(filepath.Join(dir, corruptBase+".idx.json"), []byte(`{"file":"logs-corrupt-test.parquet","started":"2026-09-06T12:00:00Z","ended":"2026-09-06T12:00:00Z","row_count":0,"projects":["billing"],"size_bytes":0}`), 0o644); err != nil {
+		t.Fatalf("write corrupt sidecar: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, corruptBase), []byte("not a parquet file"), 0o644); err != nil {
+		t.Fatalf("write corrupt parquet: %v", err)
+	}
+
+	loader, _ := NewIndexLoader(dir, nil)
+	if n := loader.Count(); n != 1 {
+		t.Fatalf("expected loader to skip the corrupt entry, got count=%d", n)
+	}
+
+	engine := NewEngine(loader, nil)
+	resp, err := engine.Execute(Query{Project: "billing"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if resp.Count != 1 {
+		t.Errorf("expected 1 result from the good file, got %d", resp.Count)
+	}
+}
+
 func TestHTTPHandlers(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 9, 6, 8, 0, 0, 0, time.UTC)
 	writeFixture(t, dir, []model.LogEvent{
 		makeEvent(base, "billing", "req-1", "INFO", "ok"),
 	}, 1<<20)
-	loader, _ := NewIndexLoader(dir)
+	loader, _ := NewIndexLoader(dir, nil)
 	srv := NewServer(loader, nil)
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()
@@ -245,7 +286,7 @@ func TestHTTPHandlers(t *testing.T) {
 
 func TestHTTPHealthzViaRun(t *testing.T) {
 	dir := t.TempDir()
-	loader, _ := NewIndexLoader(dir)
+	loader, _ := NewIndexLoader(dir, nil)
 	srv := NewServer(loader, nil)
 
 	ts := httptest.NewServer(srv.Router())
@@ -265,7 +306,7 @@ func TestHTTPHealthzViaRun(t *testing.T) {
 // cancelled and the listener is torn down.
 func TestRunGracefulShutdown(t *testing.T) {
 	dir := t.TempDir()
-	loader, _ := NewIndexLoader(dir)
+	loader, _ := NewIndexLoader(dir, nil)
 	srv := NewServer(loader, nil)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
