@@ -1,5 +1,8 @@
 {
   "rewrites": [
-    { "source": "/api/**", "destination": "http://logging-collector:8080/**" }
+    { "source": "/api/**", "destination": "/api/**" }
+  ],
+  "proxies": [
+    { "source": "/api", "destination": "http://logging-collector:8080" }
   ]
 }
