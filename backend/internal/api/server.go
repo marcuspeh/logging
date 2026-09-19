@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/cors"
 )
 
 // Server is the HTTP front-end for queries.
@@ -36,13 +35,6 @@ func NewServer(loader *IndexLoader, logger *slog.Logger) *Server {
 // Router returns the configured HTTP handler.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://localhost:4173"},
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type"},
-		AllowCredentials: false,
-		MaxAge:           300,
-	}))
 	r.Get("/healthz", s.handleHealth)
 	r.Get("/query", s.handleQuery)
 	r.Get("/files", s.handleFiles)
