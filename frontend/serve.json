@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/**", "destination": "http://logging-collector:8080/**" }
+  ]
+}

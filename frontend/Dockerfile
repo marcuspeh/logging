@@ -1,14 +1,17 @@
-# Multi-stage build: Vite -> static SPA.
+# Multi-stage build: Vite -> static SPA + API proxy.
 #
 # Build-time args:
 #   VITE_API_URL  Base URL the browser hits for API requests. Defaults
-#                 to the backend collector exposed on host port 4665.
+#                 to the relative path "/api" which the runtime `serve`
+#                 config (serve.json) proxies to the backend collector.
 #
-# Runtime: a tiny static file server hosts the built SPA on host port 7765.
-# The browser talks to the backend directly (CORS to be added separately),
-# so no reverse proxy is needed.
+# Runtime:
+#   - `serve` hosts the built SPA on container port 3000.
+#   - /api/* is reverse-proxied to http://logging-collector:8080/*, so the
+#     browser only ever talks to a single origin (:7765 on the host) and
+#     no CORS configuration is needed.
 
-ARG VITE_API_URL=http://localhost:4665
+ARG VITE_API_URL=/api
 
 FROM node:20-alpine AS build
 WORKDIR /app
@@ -24,14 +27,15 @@ COPY src ./src
 
 RUN npm run build
 
-# Serve the built SPA with a minimal static server. `serve` handles the
-# SPA fallback (unknown paths return index.html) out of the box.
+# Serve the built SPA with `serve`. SPA fallback (-s) is enabled so deep
+# links / refreshes return index.html. The serve.json rewrites send any
+# /api/* request to the backend collector over the docker network.
 FROM node:20-alpine
 RUN npm install -g serve@^14.2.4 --no-audit --no-fund
 
 COPY --from=build /app/dist /app/dist
+COPY serve.json /app/serve.json
 
 WORKDIR /app
 EXPOSE 3000
-# `-s` enables SPA fallback so deep links / refreshes work.
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD ["serve", "-s", "dist", "-c", "/app/serve.json", "-l", "3000"]
