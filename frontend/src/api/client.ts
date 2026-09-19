@@ -11,9 +11,9 @@ import axios from "axios";
 //      Vite proxy in vite.config.ts (the proxy strips "/api" before
 //      forwarding to the backend).
 function resolveBaseURL(): string {
-  const raw = import.meta.env.VITE_API_URL?.trim();
-  if (raw && raw.length > 0) {
-    return raw.replace(/\/+$/, "");
+  const raw = import.meta.env.VITE_API_URL;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw.trim().replace(/\/+$/, "");
   }
   return "/api";
 }

@@ -1,15 +1,15 @@
-# Multi-stage build: Vite -> static SPA + API proxy.
+# Multi-stage build: Vite -> nginx static host + reverse proxy.
 #
 # Build-time args:
-#   VITE_API_URL  Base URL the browser hits for API requests. Defaults
-#                 to the relative path "/api" which the runtime `serve`
-#                 config (serve.json) proxies to the backend collector.
+#   VITE_API_URL  Base URL the browser hits for API requests. The default
+#                 ("/api") is a relative path that nginx proxies to the
+#                 backend collector over the docker network.
 #
 # Runtime:
-#   - `serve` hosts the built SPA on container port 3000.
-#   - /api/* is reverse-proxied to http://logging-collector:8080/*, so the
-#     browser only ever talks to a single origin (:7765 on the host) and
-#     no CORS configuration is needed.
+#   - nginx serves the built SPA on container port 80.
+#   - /api/* is reverse-proxied to http://logging-collector:8080/* so
+#     the browser only ever talks to a single origin (:7765 on the host)
+#     and no CORS configuration is needed.
 
 ARG VITE_API_URL=/api
 
@@ -27,15 +27,9 @@ COPY src ./src
 
 RUN npm run build
 
-# Serve the built SPA with `serve`. SPA fallback (-s) is enabled so deep
-# links / refreshes return index.html. The serve.json rewrites send any
-# /api/* request to the backend collector over the docker network.
-FROM node:20-alpine
-RUN npm install -g serve@^14.2.4 --no-audit --no-fund
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-COPY --from=build /app/dist /app/dist
-COPY serve.json /app/serve.json
-
-WORKDIR /app
-EXPOSE 3000
-CMD ["serve", "-s", "dist", "-c", "/app/serve.json", "-l", "3000"]
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
