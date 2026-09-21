@@ -117,22 +117,7 @@ export function FilterPanel({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <label className="space-y-1 text-xs text-slate-600">
-          <span>Limit</span>
-          <input
-            type="number"
-            min={1}
-            max={1000}
-            value={draft.limit ?? 100}
-            onChange={(e) =>
-              onApply({
-                limit: e.target.value ? Number(e.target.value) : undefined,
-              })
-            }
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-          />
-        </label>
+      <div className="grid grid-cols-1 gap-2">
         <label className="space-y-1 text-xs text-slate-600">
           <span>Order</span>
           <select

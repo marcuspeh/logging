@@ -148,6 +148,13 @@ func parseQuery(r *http.Request) (Query, error) {
 		}
 		q.Limit = n
 	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return q, fmt.Errorf("'offset' must be a non-negative integer")
+		}
+		q.Offset = n
+	}
 	if v := r.URL.Query().Get("order"); v != "" {
 		switch v {
 		case "asc":

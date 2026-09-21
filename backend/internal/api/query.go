@@ -1,7 +1,6 @@
 package api
 
 import (
-	"container/heap"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +26,7 @@ type Query struct {
 	From    time.Time
 	To      time.Time
 	Limit   int
+	Offset  int
 	Order   Order
 }
 
@@ -61,27 +61,6 @@ type ResultRow struct {
 type Response struct {
 	Count   int         `json:"count"`
 	Results []ResultRow `json:"results"`
-}
-
-// rowHeap implements a min-heap on row timestamp, used for bounded K-way
-// merge across multiple Parquet files.
-type rowHeap struct {
-	rows []model.LogEvent
-	less func(a, b model.LogEvent) bool
-}
-
-func (h rowHeap) Len() int           { return len(h.rows) }
-func (h rowHeap) Less(i, j int) bool { return h.less(h.rows[i], h.rows[j]) }
-func (h rowHeap) Swap(i, j int)      { h.rows[i], h.rows[j] = h.rows[j], h.rows[i] }
-func (h *rowHeap) Push(x interface{}) {
-	h.rows = append(h.rows, x.(model.LogEvent))
-}
-func (h *rowHeap) Pop() interface{} {
-	old := h.rows
-	n := len(old)
-	x := old[n-1]
-	h.rows = old[:n-1]
-	return x
 }
 
 // Engine runs queries across an IndexLoader.
@@ -143,38 +122,42 @@ func (e *Engine) Execute(q Query) (Response, error) {
 		limit = 1000
 	}
 
-	less := func(a, b model.LogEvent) bool { return a.Timestamp.Before(b.Timestamp) }
-	if q.Order == OrderDesc {
-		less = func(a, b model.LogEvent) bool { return a.Timestamp.After(b.Timestamp) }
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
 	}
 
-	merged := &rowHeap{less: less}
+	// Collect every row that matches the per-row predicates so the
+	// reported Count is the true total (clients need it to drive
+	// pagination UI). The bounded heap was a micro-optimisation that
+	// got in the way of accurate pagination; rows are already bounded
+	// by the parquet file scan.
+	var all []model.LogEvent
 	for _, c := range cursors {
 		for _, r := range c.rows {
 			if !rowMatches(r, q) {
 				continue
 			}
-			if merged.Len() < limit {
-				heap.Push(merged, r)
-			} else if less(r, merged.rows[0]) {
-				heap.Pop(merged)
-				heap.Push(merged, r)
-			}
+			all = append(all, r)
 		}
 	}
 
-	out := make([]model.LogEvent, 0, merged.Len())
-	for merged.Len() > 0 {
-		out = append(out, heap.Pop(merged).(model.LogEvent))
-	}
 	if q.Order == OrderAsc {
-		sort.Slice(out, func(i, j int) bool { return out[i].Timestamp.Before(out[j].Timestamp) })
+		sort.Slice(all, func(i, j int) bool { return all[i].Timestamp.Before(all[j].Timestamp) })
 	} else {
-		sort.Slice(out, func(i, j int) bool { return out[i].Timestamp.After(out[j].Timestamp) })
+		sort.Slice(all, func(i, j int) bool { return all[i].Timestamp.After(all[j].Timestamp) })
 	}
+	if offset > len(all) {
+		offset = len(all)
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page := all[offset:end]
 
-	resp := Response{Count: len(out), Results: make([]ResultRow, 0, len(out))}
-	for _, ev := range out {
+	resp := Response{Count: len(all), Results: make([]ResultRow, 0, len(page))}
+	for _, ev := range page {
 		resp.Results = append(resp.Results, ResultRow{
 			Timestamp: ev.Timestamp,
 			Project:   ev.Project,

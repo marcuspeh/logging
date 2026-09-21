@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import { FilterPanel } from "../components/FilterPanel";
 import { ResultsTable } from "../components/ResultsTable";
 import { EmptyState } from "../components/EmptyState";
@@ -10,11 +10,26 @@ import { extractErrorMessage } from "../api/client";
 // and results table around the URL-synced useSearch hook. Free-text
 // fields (project, logid) only commit on Enter / Search; structural
 // filters apply immediately.
+//
+// Pagination:
+//   - First fetch returns 200 rows.
+//   - "Load 200 more" button at the bottom of the results appends the
+//     next page. Disabled when we've loaded every matching row.
 export function QueryPage() {
-  const { draft, params, commit, apply, updateDraft, reset, query, enabled } =
-    useSearch();
-  const rows = query.data?.results ?? [];
-  const count = query.data?.count ?? 0;
+  const {
+    draft,
+    params,
+    commit,
+    apply,
+    updateDraft,
+    reset,
+    loadMore,
+    query,
+    enabled,
+    rows,
+    totalCount,
+    hasMore,
+  } = useSearch();
 
   // Click-to-filter on a result row's logid: stamp both draft and params
   // immediately so the filtered view renders without needing Enter.
@@ -45,10 +60,15 @@ export function QueryPage() {
                 <span>Loading…</span>
               ) : query.isError ? (
                 <span className="text-red-700">Query failed</span>
+              ) : totalCount > 0 ? (
+                <span>
+                  Showing <strong className="text-slate-900">{rows.length}</strong> of{" "}
+                  <strong className="text-slate-900">{totalCount}</strong> result
+                  {totalCount === 1 ? "" : "s"}
+                </span>
               ) : (
                 <span>
-                  <strong className="text-slate-900">{count}</strong> result
-                  {count === 1 ? "" : "s"}
+                  <strong className="text-slate-900">0</strong> results
                 </span>
               )
             ) : (
@@ -61,7 +81,7 @@ export function QueryPage() {
               onClick={() => query.refetch()}
               className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               disabled={query.isFetching}
-              title="Re-run this query"
+              title="Re-run this query from the first page"
             >
               <RefreshCw
                 className={`h-3.5 w-3.5 ${query.isFetching ? "animate-spin" : ""}`}
@@ -87,6 +107,22 @@ export function QueryPage() {
 
         {enabled && rows.length > 0 ? (
           <ResultsTable rows={rows} onPickLogId={onPickLogId} />
+        ) : null}
+
+        {enabled && rows.length > 0 && hasMore ? (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={query.isFetching}
+              className="inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            >
+              <ChevronDown className="h-4 w-4" />
+              {query.isFetching
+                ? "Loading…"
+                : `Load 200 more (${rows.length} of ${totalCount})`}
+            </button>
+          </div>
         ) : null}
 
         {!enabled ? (

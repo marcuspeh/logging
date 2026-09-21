@@ -158,8 +158,12 @@ func TestQueryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if resp.Count != 1 {
-		t.Errorf("limit not honoured: count = %d", resp.Count)
+	// Count is the total matching rows; Results is the page.
+	if resp.Count != 3 {
+		t.Errorf("count = %d, want 3 (total matches)", resp.Count)
+	}
+	if len(resp.Results) != 1 {
+		t.Errorf("limit not honoured: results = %d, want 1", len(resp.Results))
 	}
 
 	resp, err = engine.Execute(Query{Project: "billing", Order: OrderAsc, Limit: 10})
@@ -168,6 +172,42 @@ func TestQueryEndToEnd(t *testing.T) {
 	}
 	if !resp.Results[0].Timestamp.Before(resp.Results[len(resp.Results)-1].Timestamp) {
 		t.Errorf("asc order wrong: %+v", resp.Results)
+	}
+
+	// Pagination: total count stays the same across pages, and rows
+	// don't overlap or skip when stepping through offset. The fixture
+	// has 3 billing events (req-1 INFO, req-1 ERROR, req-9 INFO).
+	resp, err = engine.Execute(Query{Project: "billing", Limit: 1, Offset: 0})
+	if err != nil {
+		t.Fatalf("Execute page 0: %v", err)
+	}
+	first := resp.Results
+	if resp.Count != 3 || len(resp.Results) != 1 {
+		t.Fatalf("page 0: count=%d results=%d, want 3/1", resp.Count, len(resp.Results))
+	}
+
+	resp, err = engine.Execute(Query{Project: "billing", Limit: 2, Offset: 1})
+	if err != nil {
+		t.Fatalf("Execute page 1: %v", err)
+	}
+	if resp.Count != 3 || len(resp.Results) != 2 {
+		t.Fatalf("page 1: count=%d results=%d, want 3/2", resp.Count, len(resp.Results))
+	}
+	for _, r := range resp.Results {
+		for _, prev := range first {
+			if r.Timestamp == prev.Timestamp {
+				t.Errorf("page 1 overlaps page 0: %v", r.Timestamp)
+			}
+		}
+	}
+
+	// Offset past the end returns an empty page with the same count.
+	resp, err = engine.Execute(Query{Project: "billing", Limit: 10, Offset: 100})
+	if err != nil {
+		t.Fatalf("Execute past end: %v", err)
+	}
+	if resp.Count != 3 || len(resp.Results) != 0 {
+		t.Errorf("past-end: count=%d results=%d, want 3/0", resp.Count, len(resp.Results))
 	}
 }
 

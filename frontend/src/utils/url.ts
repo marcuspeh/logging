@@ -10,6 +10,7 @@ export function toSearchParams(p: QueryParams): URLSearchParams {
   if (p.from) sp.set("from", p.from);
   if (p.to) sp.set("to", p.to);
   if (p.limit != null) sp.set("limit", String(p.limit));
+  if (p.offset != null && p.offset > 0) sp.set("offset", String(p.offset));
   if (p.order) sp.set("order", p.order);
   return sp;
 }
@@ -33,6 +34,11 @@ export function fromSearchParams(input: URLSearchParams | string): QueryParams {
   if (limit) {
     const n = Number(limit);
     if (Number.isFinite(n) && n > 0) out.limit = n;
+  }
+  const offset = sp.get("offset");
+  if (offset) {
+    const n = Number(offset);
+    if (Number.isFinite(n) && n >= 0) out.offset = n;
   }
   const order = sp.get("order");
   if (order === "asc" || order === "desc") out.order = order;

@@ -39,5 +39,6 @@ export interface QueryParams {
   from?: string; // RFC3339
   to?: string;   // RFC3339
   limit?: number;
+  offset?: number;
   order?: "asc" | "desc";
 }
