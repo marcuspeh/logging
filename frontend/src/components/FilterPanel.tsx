@@ -18,8 +18,9 @@ interface Props {
 
 // FilterPanel owns the form chrome for the query. Free-text fields
 // (project, logid) only update the draft until the user presses Enter
-// or clicks Search; structural filters (level, time, limit, order) apply
+// or clicks Search; structural filters (level, time range, order) apply
 // immediately so picking a level chip already narrows the results.
+// Page size is fixed in useSearch and not user-configurable here.
 export function FilterPanel({
   draft,
   onUpdateDraft,
