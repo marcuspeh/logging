@@ -1,7 +1,8 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LogRow } from "../api/types";
 import { ResultRow, ROW_HEIGHT } from "./ResultRow";
+import { MessageModal } from "./MessageModal";
 
 interface Props {
   rows: LogRow[];
@@ -11,54 +12,61 @@ interface Props {
 // ResultsTable virtualizes the row list so we can render up to the
 // backend's 1000-row cap without paying for 1000 DOM nodes.
 //
-// Each row reports its own measured height via ResizeObserver (passed
-// through `measureElement`), so expanding a long message grows the
-// row and reflows the offsets of every row beneath it. The estimate
-// is only used before the first measurement lands.
+// Every row stays at a fixed height: long messages are clamped and
+// opened in MessageModal on click. The virtualizer only needs to
+// measure each row once, so ResizeObserver-driven offsets are stable
+// and there's no risk of one row overlapping the next.
 export function ResultsTable({ rows, onPickLogId }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const [modalRow, setModalRow] = useState<LogRow | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 4,
-    measureElement: (el) =>
-      el?.getBoundingClientRect().height ?? ROW_HEIGHT,
   });
 
   return (
-    <div
-      ref={parentRef}
-      className="h-[calc(100vh-220px)] min-h-[400px] overflow-auto rounded border border-slate-200 bg-white"
-    >
+    <>
       <div
-        style={{
-          height: `${virtualizer.getTotalSize()}px`,
-          width: "100%",
-          position: "relative",
-        }}
+        ref={parentRef}
+        className="h-[calc(100vh-220px)] min-h-[400px] overflow-auto rounded border border-slate-200 bg-white"
       >
-        {virtualizer.getVirtualItems().map((vRow) => {
-          const row = rows[vRow.index];
-          return (
-            <ResultRow
-              key={vRow.key}
-              row={row}
-              data-index={vRow.index}
-              ref={virtualizer.measureElement}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                transform: `translate3d(0, ${vRow.start}px, 0)`,
-              }}
-              onPickLogId={onPickLogId}
-            />
-          );
-        })}
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((vRow) => {
+            const row = rows[vRow.index];
+            return (
+              <ResultRow
+                key={vRow.key}
+                row={row}
+                data-index={vRow.index}
+                ref={(node) => virtualizer.measureElement(node)}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  transform: `translate3d(0, ${vRow.start}px, 0)`,
+                }}
+                onPickLogId={onPickLogId}
+                onOpenMessage={setModalRow}
+              />
+            );
+          })}
+        </div>
       </div>
-    </div>
+      <MessageModal
+        row={modalRow}
+        onClose={() => setModalRow(null)}
+        onPickLogId={onPickLogId}
+      />
+    </>
   );
 }

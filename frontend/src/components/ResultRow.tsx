@@ -1,5 +1,5 @@
-import { forwardRef, useState } from "react";
-import { Copy, Check, ChevronDown } from "lucide-react";
+import { forwardRef, useRef, useState } from "react";
+import { Copy, Check, Maximize2 } from "lucide-react";
 import clsx from "clsx";
 import type { LogRow } from "../api/types";
 import { LevelBadge } from "./LevelBadge";
@@ -9,29 +9,33 @@ interface Props {
   row: LogRow;
   style?: React.CSSProperties;
   onPickLogId: (logid: string) => void;
+  onOpenMessage: (row: LogRow) => void;
 }
-
-// Initial estimate for the virtualizer. Each row reports its real
-// height via ResizeObserver (see ResultsTable) so the actual height
-// can grow without clipping when a message is expanded.
-//
-// Collapsed row: meta header (~36px) + 2-line preview (~36px) +
-// button + padding ≈ 110px.
-// Expanded row: meta header + full message (no upper bound).
-export const ROW_HEIGHT = 110;
 
 // ResultRow renders a single log row in a virtualized list.
 //
 // Layout:
 //   - Meta lines (timestamp/level/project + logid/caller) take 2 rows.
-//   - Message is CSS-clamped to 2 lines when collapsed; the clamp is
-//     lifted and the row grows when the user clicks "more".
-//   - The parent virtualizer measures each row's real height, so
-//     expanded rows reflow neighbouring offsets instead of overlapping.
+//   - Message is CSS-clamped to MAX_MESSAGE_LINES with ellipsis.
+//   - "Long" rows get a "Show full message" button that opens a modal
+//     (see MessageModal) instead of expanding inline — this keeps
+//     every row at a fixed height so the virtualizer never has to
+//     reflow and rows can't overlap.
+//
+// The parent virtualizer uses measureElement via the forwarded ref so
+// initial render uses an estimate; once measured the real height
+// sticks. Rows never change height after mount.
+export const ROW_HEIGHT = 110;
+
 export const ResultRow = forwardRef<HTMLDivElement, Props>(
-  function ResultRow({ row, style, onPickLogId }, ref) {
+  function ResultRow({ row, style, onPickLogId, onOpenMessage }, ref) {
     const [copied, setCopied] = useState<string | null>(null);
-    const [expanded, setExpanded] = useState(false);
+
+    const setRefs = (node: HTMLDivElement | null) => {
+      // TanStack Virtual always passes `ref` as a callback function,
+      // so we only need to forward to the function-ref path.
+      if (typeof ref === "function") ref(node);
+    };
 
     const copy = async (text: string, key: string) => {
       try {
@@ -46,12 +50,12 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
     // "Long" = visually long enough to clamp on the narrowest phone.
     // At ~16px wide chars × 2 lines × ~40 cols on a 360px screen, 120
     // chars is roughly the line-clamp threshold; anything past that
-    // gets the expand toggle.
+    // gets the "open in modal" button.
     const isLong = row.message.length > 120;
 
     return (
       <div
-        ref={ref}
+        ref={setRefs}
         style={style}
         className="border-b border-slate-100 px-3 py-2 font-mono text-xs"
       >
@@ -86,7 +90,7 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
           {row.caller ? (
             <button
               type="button"
-              onClick={() => copy(row.caller, "caller")}
+              onClick={() => copy(row.caller!, "caller")}
               className="inline-flex max-w-full items-center gap-1 truncate text-slate-400 hover:text-slate-700"
               title={`Copy caller (${row.caller})`}
             >
@@ -100,13 +104,11 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
           ) : null}
         </div>
 
-        {/* Message. Collapsed: clamped to MAX_MESSAGE_LINES with
-            ellipsis. Expanded: clamp lifted, row grows past
-            ROW_HEIGHT, virtualizer scroll container handles overflow. */}
+        {/* Message — always clamped. The full text opens in a modal. */}
         <p
           className={clsx(
             "mt-1 overflow-hidden whitespace-pre-wrap break-words text-slate-800",
-            !expanded && isLong && "line-clamp-2",
+            isLong && "line-clamp-2",
           )}
           style={{ overflowWrap: "anywhere" }}
         >
@@ -116,16 +118,12 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
         {isLong ? (
           <button
             type="button"
-            onClick={() => setExpanded((v) => !v)}
+            onClick={() => onOpenMessage(row)}
             className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+            title="Show full message"
           >
-            <ChevronDown
-              className={clsx(
-                "h-3 w-3 transition-transform",
-                expanded && "rotate-180",
-              )}
-            />
-            {expanded ? "Show less" : "Show full message"}
+            <Maximize2 className="h-3 w-3" />
+            Show full message
           </button>
         ) : null}
       </div>
