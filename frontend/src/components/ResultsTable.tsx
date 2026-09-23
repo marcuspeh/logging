@@ -11,9 +11,10 @@ interface Props {
 // ResultsTable virtualizes the row list so we can render up to the
 // backend's 1000-row cap without paying for 1000 DOM nodes.
 //
-// All rows use a fixed height imported from ResultRow so the
-// virtualizer's offset math is exact — no measurement race, no
-// overlapping rows even when individual messages are huge.
+// Each row reports its own measured height via ResizeObserver (passed
+// through `measureElement`), so expanding a long message grows the
+// row and reflows the offsets of every row beneath it. The estimate
+// is only used before the first measurement lands.
 export function ResultsTable({ rows, onPickLogId }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -21,7 +22,9 @@ export function ResultsTable({ rows, onPickLogId }: Props) {
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
-    overscan: 6,
+    overscan: 4,
+    measureElement: (el) =>
+      el?.getBoundingClientRect().height ?? ROW_HEIGHT,
   });
 
   return (
@@ -42,13 +45,13 @@ export function ResultsTable({ rows, onPickLogId }: Props) {
             <ResultRow
               key={vRow.key}
               row={row}
+              data-index={vRow.index}
+              ref={virtualizer.measureElement}
               style={{
                 position: "absolute",
                 top: 0,
                 left: 0,
                 right: 0,
-                // translate3d forces GPU compositing so abs-positioned
-                // rows stay aligned with the virtualizer's start offsets.
                 transform: `translate3d(0, ${vRow.start}px, 0)`,
               }}
               onPickLogId={onPickLogId}

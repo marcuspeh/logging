@@ -11,26 +11,23 @@ interface Props {
   onPickLogId: (logid: string) => void;
 }
 
-// All rows use a single fixed pixel height. This matches the
-// virtualizer's estimateSize so the virtualizer's `start` offsets
-// stay perfectly accurate — no measurement race, no row overlap,
-// even when the underlying message is 5KB.
+// Initial estimate for the virtualizer. Each row reports its real
+// height via ResizeObserver (see ResultsTable) so the actual height
+// can grow without clipping when a message is expanded.
 //
-// The height has to fit the meta header (2 lines) + at least 2 lines
-// of message preview + an expand button in the corner. 96px covers
-// all of that comfortably.
-export const ROW_HEIGHT = 96;
+// Collapsed row: meta header (~36px) + 2-line preview (~36px) +
+// button + padding ≈ 110px.
+// Expanded row: meta header + full message (no upper bound).
+export const ROW_HEIGHT = 110;
 
 // ResultRow renders a single log row in a virtualized list.
 //
-// Mobile-safety notes:
-//   - Fixed `height: ROW_HEIGHT` keeps the virtualizer's layout simple
-//     and prevents overlap.
-//   - Meta lines are split into two predictable rows so they fit
-//     even when logid is long.
-//   - The message is clamped to MAX_MESSAGE_LINES via CSS line-clamp
-//     when collapsed; "Show more" lifts the clamp and lets the row
-//     grow past its fixed height to fit the full message.
+// Layout:
+//   - Meta lines (timestamp/level/project + logid/caller) take 2 rows.
+//   - Message is CSS-clamped to 2 lines when collapsed; the clamp is
+//     lifted and the row grows when the user clicks "more".
+//   - The parent virtualizer measures each row's real height, so
+//     expanded rows reflow neighbouring offsets instead of overlapping.
 export const ResultRow = forwardRef<HTMLDivElement, Props>(
   function ResultRow({ row, style, onPickLogId }, ref) {
     const [copied, setCopied] = useState<string | null>(null);
@@ -55,8 +52,8 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
     return (
       <div
         ref={ref}
-        style={{ ...style, height: `${ROW_HEIGHT}px` }}
-        className="overflow-hidden border-b border-slate-100 px-3 py-2 font-mono text-xs"
+        style={style}
+        className="border-b border-slate-100 px-3 py-2 font-mono text-xs"
       >
         {/* Line 1: timestamp + level + project (always fits on one row). */}
         <div className="flex items-center gap-2">
@@ -120,10 +117,7 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            // absolutely positioned so it doesn't push the row height
-            // when collapsed; expanded rows fall out of the fixed
-            // height and overlap their neighbours — see note above.
-            className="absolute bottom-1 right-2 inline-flex items-center gap-1 rounded bg-white/90 px-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+            className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"
           >
             <ChevronDown
               className={clsx(
@@ -131,7 +125,7 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
                 expanded && "rotate-180",
               )}
             />
-            {expanded ? "less" : "more"}
+            {expanded ? "Show less" : "Show full message"}
           </button>
         ) : null}
       </div>
