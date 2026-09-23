@@ -9,15 +9,18 @@ interface Props {
 }
 
 // ResultsTable virtualizes the row list so we can render up to the
-// backend's 1000-row limit without paying for 1000 DOM nodes.
+// backend's 1000-row cap without paying for 1000 DOM nodes. Row height
+// is measured dynamically so collapsed (clamped) and expanded messages
+// both reflow the scroll height correctly.
 export function ResultsTable({ rows, onPickLogId }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 64,
+    estimateSize: () => 96, // meta line + ~2 lines message + button + padding
     overscan: 8,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   return (
@@ -38,6 +41,8 @@ export function ResultsTable({ rows, onPickLogId }: Props) {
             <ResultRow
               key={vRow.key}
               row={row}
+              data-index={vRow.index}
+              ref={virtualizer.measureElement}
               style={{
                 position: "absolute",
                 top: 0,
