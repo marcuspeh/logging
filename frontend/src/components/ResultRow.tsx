@@ -11,22 +11,26 @@ interface Props {
   onPickLogId: (logid: string) => void;
 }
 
-// Preview length before "Show more" appears. Long enough to fit ~3
-// log lines on a narrow phone, short enough that single-line messages
-// never trigger the expand toggle.
-const PREVIEW_CHARS = 240;
+// All rows use a single fixed pixel height. This matches the
+// virtualizer's estimateSize so the virtualizer's `start` offsets
+// stay perfectly accurate — no measurement race, no row overlap,
+// even when the underlying message is 5KB.
+//
+// The height has to fit the meta header (2 lines) + at least 2 lines
+// of message preview + an expand button in the corner. 96px covers
+// all of that comfortably.
+export const ROW_HEIGHT = 96;
 
 // ResultRow renders a single log row in a virtualized list.
 //
 // Mobile-safety notes:
-//   - The outer div has `overflow-hidden` so a row can never visually
-//     bleed into the next slot while the virtualizer is catching up
-//     with `measureElement`.
-//   - The meta line is split into two predictable rows (timestamp + level
-//     + project on top; logid + caller on bottom). Layout height is
-//     bounded even when logids are 60+ chars.
-//   - Message preview is a JS-truncated string, not CSS line-clamp, so
-//     it survives `whitespace-pre-wrap` and any browser quirk.
+//   - Fixed `height: ROW_HEIGHT` keeps the virtualizer's layout simple
+//     and prevents overlap.
+//   - Meta lines are split into two predictable rows so they fit
+//     even when logid is long.
+//   - The message is clamped to MAX_MESSAGE_LINES via CSS line-clamp
+//     when collapsed; "Show more" lifts the clamp and lets the row
+//     grow past its fixed height to fit the full message.
 export const ResultRow = forwardRef<HTMLDivElement, Props>(
   function ResultRow({ row, style, onPickLogId }, ref) {
     const [copied, setCopied] = useState<string | null>(null);
@@ -42,16 +46,16 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
       }
     };
 
-    const isLong = row.message.length > PREVIEW_CHARS;
-    const display =
-      !isLong || expanded
-        ? row.message
-        : row.message.slice(0, PREVIEW_CHARS).trimEnd() + "…";
+    // "Long" = visually long enough to clamp on the narrowest phone.
+    // At ~16px wide chars × 2 lines × ~40 cols on a 360px screen, 120
+    // chars is roughly the line-clamp threshold; anything past that
+    // gets the expand toggle.
+    const isLong = row.message.length > 120;
 
     return (
       <div
         ref={ref}
-        style={style}
+        style={{ ...style, height: `${ROW_HEIGHT}px` }}
         className="overflow-hidden border-b border-slate-100 px-3 py-2 font-mono text-xs"
       >
         {/* Line 1: timestamp + level + project (always fits on one row). */}
@@ -99,21 +103,27 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
           ) : null}
         </div>
 
-        {/* Message. `overflow-wrap-anywhere` breaks unbreakable strings
-            (URLs, hex blobs) inside the row's width instead of pushing
-            the row wider. */}
+        {/* Message. Collapsed: clamped to MAX_MESSAGE_LINES with
+            ellipsis. Expanded: clamp lifted, row grows past
+            ROW_HEIGHT, virtualizer scroll container handles overflow. */}
         <p
-          className="mt-1 whitespace-pre-wrap break-words text-slate-800"
+          className={clsx(
+            "mt-1 overflow-hidden whitespace-pre-wrap break-words text-slate-800",
+            !expanded && isLong && "line-clamp-2",
+          )}
           style={{ overflowWrap: "anywhere" }}
         >
-          {display}
+          {row.message}
         </p>
 
         {isLong ? (
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+            // absolutely positioned so it doesn't push the row height
+            // when collapsed; expanded rows fall out of the fixed
+            // height and overlap their neighbours — see note above.
+            className="absolute bottom-1 right-2 inline-flex items-center gap-1 rounded bg-white/90 px-1 text-xs font-medium text-slate-500 hover:text-slate-800"
           >
             <ChevronDown
               className={clsx(
@@ -121,7 +131,7 @@ export const ResultRow = forwardRef<HTMLDivElement, Props>(
                 expanded && "rotate-180",
               )}
             />
-            {expanded ? "Show less" : `Show more (${row.message.length} chars)`}
+            {expanded ? "less" : "more"}
           </button>
         ) : null}
       </div>

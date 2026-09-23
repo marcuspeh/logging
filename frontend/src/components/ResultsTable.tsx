@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LogRow } from "../api/types";
-import { ResultRow } from "./ResultRow";
+import { ResultRow, ROW_HEIGHT } from "./ResultRow";
 
 interface Props {
   rows: LogRow[];
@@ -9,18 +9,19 @@ interface Props {
 }
 
 // ResultsTable virtualizes the row list so we can render up to the
-// backend's 1000-row cap without paying for 1000 DOM nodes. Row height
-// is measured dynamically so collapsed (clamped) and expanded messages
-// both reflow the scroll height correctly.
+// backend's 1000-row cap without paying for 1000 DOM nodes.
+//
+// All rows use a fixed height imported from ResultRow so the
+// virtualizer's offset math is exact — no measurement race, no
+// overlapping rows even when individual messages are huge.
 export function ResultsTable({ rows, onPickLogId }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 110, // 2-line meta header + ~3 lines message + button
-    overscan: 8,
-    measureElement: (el) => el.getBoundingClientRect().height,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 6,
   });
 
   return (
@@ -41,14 +42,14 @@ export function ResultsTable({ rows, onPickLogId }: Props) {
             <ResultRow
               key={vRow.key}
               row={row}
-              data-index={vRow.index}
-              ref={virtualizer.measureElement}
               style={{
                 position: "absolute",
                 top: 0,
                 left: 0,
                 right: 0,
-                transform: `translateY(${vRow.start}px)`,
+                // translate3d forces GPU compositing so abs-positioned
+                // rows stay aligned with the virtualizer's start offsets.
+                transform: `translate3d(0, ${vRow.start}px, 0)`,
               }}
               onPickLogId={onPickLogId}
             />
