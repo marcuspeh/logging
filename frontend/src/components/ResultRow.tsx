@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useState } from "react";
+import { forwardRef, useState } from "react";
 import { Copy, Check, Maximize2 } from "lucide-react";
 import clsx from "clsx";
 import type { LogRow } from "../api/types";
