@@ -18,7 +18,7 @@ export function ResultsTable({ rows, onPickLogId }: Props) {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 96, // meta line + ~2 lines message + button + padding
+    estimateSize: () => 110, // 2-line meta header + ~3 lines message + button
     overscan: 8,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
