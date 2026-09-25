@@ -15,6 +15,7 @@ services:
         # Relative path: requests go to /api/query, the proxy in
         # serve.json forwards them to the backend.
         VITE_API_URL: ${VITE_API_URL:-/api}
+    image: logging-frontend:latest
     container_name: logging-frontend
     restart: unless-stopped
     ports:
