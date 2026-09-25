@@ -23,7 +23,7 @@
 # whole logging stack.
 
 services:
-  logger-kafka:
+  logging-kafka:
     restart: unless-stopped
     container_name: logging-kafka
     image: apache/kafka:3.9.1
