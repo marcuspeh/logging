@@ -27,8 +27,8 @@ backend/
 
 ```bash
 # one-time
-mkdir -p /home/marcuspeh/data/logging-system/kafka \
-         /home/marcuspeh/data/logging-system/parquet
+mkdir -p /mnt/data/logging/kafka \
+         /mnt/data/logging/parquet
 # edit docker-compose.yml if you want different paths
 
 cd backend
@@ -37,7 +37,7 @@ docker compose up -d
 # smoke test (sends 1000 synthetic events, asserts API results)
 go run ./cmd/smoke -api http://localhost:4665
 
-docker compose down        # keeps /home/marcuspeh/data/logging-system intact
+docker compose down        # keeps /mnt/data/logging intact
 ```
 
 The collector listens on container port `8080`; the compose file

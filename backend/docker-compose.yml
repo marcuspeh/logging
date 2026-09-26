@@ -7,20 +7,19 @@
 #   4665  Collector HTTP query API (mapped to container port 8080)
 #
 # Persistence:
-#   - Kafka broker state lives on the host under `KAFKA_DATA_DIR`
-#     (default `/home/marcuspeh/data/logging-system/kafka`). The bind
-#     mount means logs/topics survive `docker compose down/up` and even
-#     `docker volume prune`.
+#   - Kafka broker state lives on the host under
+#     `/mnt/data/logging/kafka`. The bind mount means logs/topics survive
+#     `docker compose down/up` and even `docker volume prune`.
 #   - Parquet files written by the collector are persisted on the host via
 #     the bind mount under `collector.volumes`. Deleting or recreating the
 #     collector container does NOT remove those host files — log files are
 #     durable across restarts. To wipe logs, delete the host directory
 #     contents.
 #
-# The default host base is /home/marcuspeh/data/logging-system; edit the
-# bind mounts to point at wherever you want the data stored. Kafka and
-# Parquet both sit under this directory so a single tree backs the
-# whole logging stack.
+# The default host base is /mnt/data/logging; edit the bind mounts to
+# point at wherever you want the data stored. Kafka and Parquet both
+# sit under this directory so a single tree backs the whole logging
+# stack.
 
 services:
   logging-kafka:
@@ -54,7 +53,7 @@ services:
       timeout: 5s
       retries: 20
     volumes:
-      - /home/marcuspeh/data/logging-system/kafka:/var/lib/kafka/data
+      - /mnt/data/logging/kafka:/var/lib/kafka/data
 
   logging-collector:
     restart: unless-stopped
@@ -80,7 +79,7 @@ services:
       RETENTION: "336h"          # 14 days
       RETENTION_INTERVAL: "1h"   # sweep once an hour
     volumes:
-      - /home/marcuspeh/data/logging-system/logs:/data
+      - /mnt/data/logging/logs:/data
 
 volumes:
   kafka-data:
