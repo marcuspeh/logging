@@ -37,14 +37,29 @@ type IndexLoader struct {
 
 	mu      sync.RWMutex
 	entries []IndexEntry
+
+	// lastUnreadableWarn tracks the last time we logged a "skipping
+	// unreadable parquet file" WARN for a given path, so the periodic
+	// Reload() doesn't spam the log once every indexReloadInterval for
+	// the same broken sidecar. A path is re-warned at most once every
+	// unreadableWarnInterval. Entries are pruned on every Reload().
+	lastUnreadableWarn     map[string]time.Time
+	unreadableWarnInterval time.Duration
 }
+
+const defaultUnreadableWarnInterval = 5 * time.Minute
 
 // NewIndexLoader creates a loader and performs an initial Load.
 func NewIndexLoader(dir string, logger *slog.Logger) (*IndexLoader, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	l := &IndexLoader{dir: dir, logger: logger}
+	l := &IndexLoader{
+		dir:                    dir,
+		logger:                 logger,
+		lastUnreadableWarn:     make(map[string]time.Time),
+		unreadableWarnInterval: defaultUnreadableWarnInterval,
+	}
 	if err := l.Reload(); err != nil {
 		return nil, err
 	}
@@ -70,9 +85,14 @@ func (l *IndexLoader) Reload() error {
 		return fmt.Errorf("api: glob index: %w", err)
 	}
 
+	// Track which paths we touched this pass so the rate-limit map
+	// doesn't keep growing forever.
+	seen := make(map[string]struct{}, len(matches))
+
 	var entries []IndexEntry
 	for _, idxPath := range matches {
 		pqPath := strings.TrimSuffix(idxPath, ".idx.json")
+		seen[pqPath] = struct{}{}
 
 		data, err := os.ReadFile(idxPath)
 		if err != nil {
@@ -85,13 +105,22 @@ func (l *IndexLoader) Reload() error {
 		// Skip sidecars whose parquet file is missing, zero-bytes, or
 		// missing the PAR1 magic markers. The writer hadn't finished
 		// flushing or the file got truncated; either way the query
-		// engine would hit EOF trying to read it.
+		// engine would hit EOF trying to read it. The WARN is
+		// throttled per-path so a single orphan sidecar can't spam
+		// the log on every periodic Reload().
 		if err := parquet.Validate(pqPath); err != nil {
-			l.logger.Warn("skipping unreadable parquet file", "path", pqPath, "err", err)
+			l.warnUnreadable(pqPath, err)
 			continue
 		}
+		// Path validated — clear any prior throttle entry so the next
+		// regression is loud.
+		l.clearUnreadableWarn(pqPath)
 		entries = append(entries, IndexEntry{Index: idx, Path: pqPath})
 	}
+
+	// Prune rate-limit entries for paths that no longer have a sidecar
+	// (e.g. operator deleted the orphan file).
+	l.pruneUnreadableWarn(seen)
 
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Index.Started.After(entries[j].Index.Started)
@@ -101,6 +130,38 @@ func (l *IndexLoader) Reload() error {
 	l.entries = entries
 	l.mu.Unlock()
 	return nil
+}
+
+// warnUnreadable logs the WARN for path at most once per
+// unreadableWarnInterval. Suppressed calls still return silently so
+// callers don't need to know about the throttle.
+func (l *IndexLoader) warnUnreadable(path string, err error) {
+	l.mu.Lock()
+	last, ok := l.lastUnreadableWarn[path]
+	now := time.Now()
+	if ok && now.Sub(last) < l.unreadableWarnInterval {
+		l.mu.Unlock()
+		return
+	}
+	l.lastUnreadableWarn[path] = now
+	l.mu.Unlock()
+	l.logger.Warn("skipping unreadable parquet file", "path", path, "err", err)
+}
+
+func (l *IndexLoader) clearUnreadableWarn(path string) {
+	l.mu.Lock()
+	delete(l.lastUnreadableWarn, path)
+	l.mu.Unlock()
+}
+
+func (l *IndexLoader) pruneUnreadableWarn(seen map[string]struct{}) {
+	l.mu.Lock()
+	for p := range l.lastUnreadableWarn {
+		if _, ok := seen[p]; !ok {
+			delete(l.lastUnreadableWarn, p)
+		}
+	}
+	l.mu.Unlock()
 }
 
 // Entries returns a snapshot of the loaded entries.

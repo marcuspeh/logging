@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -379,5 +381,103 @@ func TestRunGracefulShutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// TestIndexLoaderThrottlesUnreadableWarn verifies that a sidecar whose
+// parquet file is missing (or otherwise unreadable) only logs a WARN
+// once per unreadableWarnInterval, not on every periodic Reload().
+//
+// Regression for an incident where a single orphan sidecar produced one
+// WARN every indexReloadInterval (30s) → several thousand noise lines
+// per day in the collector log.
+func TestIndexLoaderThrottlesUnreadableWarn(t *testing.T) {
+	dir := t.TempDir()
+
+	// Plant a sidecar with no matching parquet file.
+	const orphan = "logs-orphan.parquet"
+	sidecar := []byte(`{"file":"logs-orphan.parquet","started":"2026-09-06T12:00:00Z","ended":"2026-09-06T12:00:00Z","row_count":1,"projects":["x"],"size_bytes":100}`)
+	if err := os.WriteFile(filepath.Join(dir, orphan+".idx.json"), sidecar, 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	l := &IndexLoader{
+		dir:                    dir,
+		logger:                 logger,
+		lastUnreadableWarn:     make(map[string]time.Time),
+		unreadableWarnInterval: 1 * time.Hour,
+	}
+	if err := l.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// Run 50 more reloads — they must NOT produce additional WARN lines.
+	for i := 0; i < 50; i++ {
+		if err := l.Reload(); err != nil {
+			t.Fatalf("Reload %d: %v", i, err)
+		}
+	}
+
+	warns := bytes.Count(logBuf.Bytes(), []byte(`"skipping unreadable parquet file"`))
+	if warns != 1 {
+		t.Fatalf("expected exactly 1 WARN across 51 reloads, got %d\nlogs:\n%s", warns, logBuf.String())
+	}
+}
+
+// TestIndexLoaderReloadsAfterOrphanFixed ensures the throttle clears
+// once the orphan is repaired, so the operator gets a fresh WARN if it
+// breaks again.
+func TestIndexLoaderReloadsAfterOrphanFixed(t *testing.T) {
+	dir := t.TempDir()
+
+	const base = "logs-throttle.parquet"
+	sidecar := []byte(`{"file":"logs-throttle.parquet","started":"2026-09-06T12:00:00Z","ended":"2026-09-06T12:00:00Z","row_count":1,"projects":["x"],"size_bytes":100}`)
+	if err := os.WriteFile(filepath.Join(dir, base+".idx.json"), sidecar, 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	l := &IndexLoader{
+		dir:                    dir,
+		logger:                 logger,
+		lastUnreadableWarn:     make(map[string]time.Time),
+		unreadableWarnInterval: 1 * time.Hour,
+	}
+
+	// 1) Missing parquet → 1 WARN, throttle armed.
+	if err := l.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if w := bytes.Count(logBuf.Bytes(), []byte(`"skipping unreadable parquet file"`)); w != 1 {
+		t.Fatalf("step 1: warns = %d, want 1", w)
+	}
+
+	// 2) Drop the orphan sidecar (operator cleaned it up) → no new
+	//    WARN, throttle entry pruned.
+	if err := os.Remove(filepath.Join(dir, base+".idx.json")); err != nil {
+		t.Fatalf("remove sidecar: %v", err)
+	}
+	if err := l.Reload(); err != nil {
+		t.Fatalf("Reload after cleanup: %v", err)
+	}
+	if w := bytes.Count(logBuf.Bytes(), []byte(`"skipping unreadable parquet file"`)); w != 1 {
+		t.Fatalf("step 2: warns = %d, want still 1", w)
+	}
+
+	// 3) Re-introduce the orphan (operator restored a stale sidecar
+	//    from a backup, say) → fresh WARN, since the previous throttle
+	//    entry was pruned in step 2.
+	if err := os.WriteFile(filepath.Join(dir, base+".idx.json"), sidecar, 0o644); err != nil {
+		t.Fatalf("re-write sidecar: %v", err)
+	}
+	if err := l.Reload(); err != nil {
+		t.Fatalf("Reload after rebreak: %v", err)
+	}
+	if w := bytes.Count(logBuf.Bytes(), []byte(`"skipping unreadable parquet file"`)); w != 2 {
+		t.Fatalf("step 3: warns = %d, want 2 (throttle should have cleared)", w)
 	}
 }

@@ -345,6 +345,14 @@ func (w *Writer) rotateLocked() error {
 // flushLocked drains the parquet writer's page buffer to disk, fsyncs,
 // and rewrites the sidecar index for the active file. Caller must hold
 // w.mu. Reset pendingRows and lastFlush on success.
+//
+// If the file has received no rows yet (e.g. only the PAR1 header has
+// been written) we skip the sidecar entirely. A sidecar that claims
+// row_count=0 / zero timestamps looks valid to the index loader and
+// makes the file appear queryable, but every row scan against it
+// returns nothing — silently shadowing newer files that *do* have
+// data when the index picks them up at zero timestamp. See incident:
+// "logs from yesterday invisible after restart".
 func (w *Writer) flushLocked() error {
 	if w.out == nil || w.file == nil {
 		return nil
@@ -354,6 +362,13 @@ func (w *Writer) flushLocked() error {
 	}
 	if err := w.file.Sync(); err != nil {
 		return fmt.Errorf("parquet: fsync: %w", err)
+	}
+	if w.rowCount == 0 {
+		// Nothing has been written beyond the parquet header. Don't
+		// emit a sidecar — there's nothing for a query to find.
+		w.pendingRows = 0
+		w.lastFlush = time.Now()
+		return nil
 	}
 	idx := Index{
 		File:      filepath.Base(w.currentPath),
@@ -373,6 +388,11 @@ func (w *Writer) flushLocked() error {
 
 // closeLocked flushes, closes, fsyncs, and writes the sidecar index for the
 // current file. Caller must hold w.mu.
+//
+// If no rows were ever written, the file contains nothing but the
+// parquet header — leaving it (with or without a sidecar) just creates
+// noise that the next Reload() then has to skip. Remove the empty file
+// (and any sidecar) so the directory stays clean.
 func (w *Writer) closeLocked() error {
 	if w.out == nil {
 		return nil
@@ -385,6 +405,18 @@ func (w *Writer) closeLocked() error {
 	}
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("parquet: close file: %w", err)
+	}
+
+	if w.rowCount == 0 {
+		// Best-effort cleanup of the empty stub. If removal fails
+		// (e.g. read-only mount), don't fail Close — the file is
+		// invalid parquet anyway and Validate() will skip it.
+		_ = os.Remove(w.currentPath)
+		_ = os.Remove(w.currentPath + idxSuffix)
+
+		w.out = nil
+		w.file = nil
+		return nil
 	}
 
 	idx := Index{

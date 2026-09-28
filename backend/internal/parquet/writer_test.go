@@ -47,6 +47,88 @@ func TestNewRejectsBadArgs(t *testing.T) {
 	}
 }
 
+// TestCloseOnEmptyRemovesStub is a regression test for an incident where
+// the writer opened a parquet file at startup, received no events, then
+// had its Close() called (e.g. shutdown, or a fast restart after
+// startup). Close() used to write a sidecar with row_count=0 and zero
+// timestamps — the index loader accepted it as a valid file, the query
+// engine returned no rows for the file's time range, and effectively
+// shadowed other files with the same time range.
+func TestCloseOnEmptyRemovesStub(t *testing.T) {
+	dir := t.TempDir()
+	w, err := New(dir, testOpts(1024, 0))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	active := filepath.Base(w.ActiveBaseName())
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Empty parquet stub should be gone.
+	pqPath := filepath.Join(dir, active)
+	if _, err := os.Stat(pqPath); !os.IsNotExist(err) {
+		t.Errorf("expected empty parquet stub removed, got err=%v", err)
+	}
+	// Sidecar should not have been written.
+	idxPath := pqPath + idxSuffix
+	if _, err := os.Stat(idxPath); !os.IsNotExist(err) {
+		t.Errorf("expected no sidecar for empty parquet, got err=%v", err)
+	}
+}
+
+// TestCloseAfterWritesStillEmitsSidecar guards the empty-removal path:
+// once we DO write rows, Close() must still produce a correct sidecar.
+func TestCloseAfterWritesStillEmitsSidecar(t *testing.T) {
+	dir := t.TempDir()
+	w, err := New(dir, testOpts(1024, 0))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ts := time.Date(2026, 9, 28, 16, 15, 0, 0, time.UTC)
+	if err := w.Write(model.LogEvent{
+		Timestamp: ts,
+		Project:   "algo01-corner2rsi",
+		LogID:     "-",
+		Level:     "INFO",
+		Message:   "hello",
+		Caller:    "main.go:52",
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Both parquet and sidecar must exist.
+	matches, err := filepath.Glob(filepath.Join(dir, "*"+idxSuffix))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 sidecar, got %d", len(matches))
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	var idx Index
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("parse sidecar: %v", err)
+	}
+	if idx.RowCount != 1 {
+		t.Errorf("row_count = %d, want 1", idx.RowCount)
+	}
+	if len(idx.Projects) != 1 || idx.Projects[0] != "algo01-corner2rsi" {
+		t.Errorf("projects = %v, want [algo01-corner2rsi]", idx.Projects)
+	}
+	if !idx.Started.Equal(ts) || !idx.Ended.Equal(ts) {
+		t.Errorf("started/ended = %v / %v, want %v", idx.Started, idx.Ended, ts)
+	}
+}
+
 func TestWriteAndCloseRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	w, err := New(dir, testOpts(1<<20, 0)) // 1 MiB - no rotation expected

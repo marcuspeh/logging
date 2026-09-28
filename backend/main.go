@@ -180,9 +180,22 @@ func run(logger *slog.Logger) error {
 	consumerErrCh := make(chan error, 1)
 	go func() {
 		defer wg.Done()
-		if err := c.Run(rootCtx); err != nil {
-			consumerErrCh <- err
+		// Always log the consumer's exit, even when Run returns nil
+		// (clean shutdown). Silent exit on a goroutine whose error
+		// channel is buffered + nil is exactly how a Kafka partition
+		// loss or bad credentials can take down ingestion without any
+		// breadcrumb. See incident: consumer silently exited after the
+		// storage move and no logs were written.
+		err := c.Run(rootCtx)
+		switch {
+		case err == nil:
+			logger.Info("consumer stopped", "reason", "run returned nil")
+		case errors.Is(err, context.Canceled):
+			logger.Info("consumer stopped", "reason", "context canceled")
+		default:
+			logger.Error("consumer stopped", "err", err)
 		}
+		consumerErrCh <- err
 		close(consumerErrCh)
 	}()
 
