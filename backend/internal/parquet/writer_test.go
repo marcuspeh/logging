@@ -129,6 +129,76 @@ func TestCloseAfterWritesStillEmitsSidecar(t *testing.T) {
 	}
 }
 
+// TestFlushMakesPendingRowsDurable is a regression test for an
+// incident where the writer's flushLocked() called GenericWriter.Flush()
+// (which only flushes in-memory parquet page buffers) instead of closing
+// the writer. Result: sidecars were written with row_count > 0 and
+// valid timestamps, but the on-disk parquet file stayed at 0 bytes
+// because no row group had been committed. /query then returned 0
+// results — the data was in memory but invisible.
+func TestFlushMakesPendingRowsDurable(t *testing.T) {
+	dir := t.TempDir()
+	w, err := New(dir, testOpts(1024, 0))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer w.Close()
+
+	ts := time.Date(2026, 9, 29, 11, 50, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if err := w.Write(model.LogEvent{
+			Timestamp: ts.Add(time.Duration(i) * time.Second),
+			Project:   "algo01-corner2rsi",
+			LogID:     "flush-test",
+			Level:     "INFO",
+			Message:   "pending",
+			Caller:    "writer_test.go:flush",
+		}); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+	}
+
+	// Before Flush: pendingRows should be > 0, the file may or may not
+	// have data on disk.
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	// After Flush: the active file from before Flush must be sealed
+	// with valid bytes and a correct sidecar.
+	matches, err := filepath.Glob(filepath.Join(dir, "*"+idxSuffix))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 sealed sidecar, got %d", len(matches))
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	var idx Index
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("parse sidecar: %v", err)
+	}
+	if idx.RowCount != 3 {
+		t.Errorf("sealed row_count = %d, want 3", idx.RowCount)
+	}
+	if idx.SizeBytes == 0 {
+		t.Errorf("sealed size_bytes = 0, want > 0 (rows must be on disk)")
+	}
+	// The active file should be a *new* (zero-byte) file with no sidecar
+	// yet — proves the flush rotated rather than just buffered.
+	active := filepath.Join(dir, filepath.Base(w.currentPath))
+	if st, err := os.Stat(active); err != nil || st.Size() != 0 {
+		t.Errorf("expected new active file at 0 bytes after flush, got err=%v size=%d", err, st.Size())
+	}
+	activeSidecar := active + idxSuffix
+	if _, err := os.Stat(activeSidecar); !os.IsNotExist(err) {
+		t.Errorf("expected no sidecar for new active file, got err=%v", err)
+	}
+}
+
 func TestWriteAndCloseRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	w, err := New(dir, testOpts(1<<20, 0)) // 1 MiB - no rotation expected

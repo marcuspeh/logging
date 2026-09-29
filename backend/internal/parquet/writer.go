@@ -163,6 +163,17 @@ func (w *Writer) Write(ev model.LogEvent) error {
 	return nil
 }
 
+// Flush makes pending rows durable to disk. If there are no pending rows
+// this is a no-op aside from resetting the flush timer. When there are
+// pending rows the active file is sealed and a new one is opened, so
+// callers should be aware that Flush can rotate the file. Safe to call
+// concurrently.
+func (w *Writer) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.flushLocked()
+}
+
 // Rotate seals the current file (flush + close + write sidecar) and opens
 // a new one. Safe to call concurrently.
 func (w *Writer) Rotate() error {
@@ -342,48 +353,33 @@ func (w *Writer) rotateLocked() error {
 	return w.openNewFile()
 }
 
-// flushLocked drains the parquet writer's page buffer to disk, fsyncs,
-// and rewrites the sidecar index for the active file. Caller must hold
-// w.mu. Reset pendingRows and lastFlush on success.
+// flushLocked makes the in-memory rows durable. The parquet-go
+// GenericWriter only persists rows to disk when its Close() is called
+// (it commits the current row group). Calling Flush() alone leaves
+// rows buffered in memory, so the on-disk file can stay at 0 bytes
+// even though we have in-memory rows. Calling Close() on the
+// GenericWriter while the file handle stays open is not supported by
+// parquet-go, so the simplest correct behaviour is to treat flush() as
+// a rotation when there are pending rows: close the parquet writer
+// (which writes the rows), close the file, write the sidecar, and open
+// a new active file. If there are no pending rows we just reset the
+// timer and return — no sidecar, no rotation.
 //
-// If the file has received no rows yet (e.g. only the PAR1 header has
-// been written) we skip the sidecar entirely. A sidecar that claims
-// row_count=0 / zero timestamps looks valid to the index loader and
-// makes the file appear queryable, but every row scan against it
-// returns nothing — silently shadowing newer files that *do* have
-// data when the index picks them up at zero timestamp. See incident:
-// "logs from yesterday invisible after restart".
+// Caller must hold w.mu.
 func (w *Writer) flushLocked() error {
 	if w.out == nil || w.file == nil {
 		return nil
 	}
-	if err := w.out.Flush(); err != nil {
-		return fmt.Errorf("parquet: flush: %w", err)
-	}
-	if err := w.file.Sync(); err != nil {
-		return fmt.Errorf("parquet: fsync: %w", err)
-	}
-	if w.rowCount == 0 {
-		// Nothing has been written beyond the parquet header. Don't
-		// emit a sidecar — there's nothing for a query to find.
+	if w.rowCount == 0 || w.pendingRows == 0 {
+		// Nothing to persist. Avoid leaking empty files / sidecars.
 		w.pendingRows = 0
 		w.lastFlush = time.Now()
 		return nil
 	}
-	idx := Index{
-		File:      filepath.Base(w.currentPath),
-		Started:   w.minTs,
-		Ended:     w.maxTs,
-		RowCount:  w.rowCount,
-		Projects:  sortedKeys(w.projects),
-		SizeBytes: fileSize(w.currentPath),
-	}
-	if err := writeIndex(w.currentPath, idx); err != nil {
-		return err
-	}
-	w.pendingRows = 0
-	w.lastFlush = time.Now()
-	return nil
+	// Rotate: closeLocked will close the parquet writer (persisting the
+	// row group to disk), fsync, and write the sidecar. openNewFile
+	// then gives us a fresh active file for the next batch.
+	return w.rotateLocked()
 }
 
 // closeLocked flushes, closes, fsyncs, and writes the sidecar index for the

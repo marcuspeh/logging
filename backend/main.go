@@ -163,6 +163,20 @@ func run(logger *slog.Logger) error {
 		reloadLoop(rootCtx, loader, logger)
 	}()
 
+	// Periodic flush: the writer's flush-by-time check only fires from
+	// inside Write(). When traffic is sparse (e.g. <1024 events per
+	// flushRows batch) the active parquet file never flushes on its own,
+	// so the API can't see recent rows until either the next write or
+	// rotation. Ticking every flushEvery makes the writer commit pending
+	// rows regardless of whether new events are arriving.
+	if cfg.ParquetFlushEvery > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			flushLoop(rootCtx, pw, cfg.ParquetFlushEvery, logger)
+		}()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -238,6 +252,26 @@ func reloadLoop(ctx context.Context, loader *api.IndexLoader, logger *slog.Logge
 		case <-t.C:
 			if err := loader.Reload(); err != nil {
 				logger.Warn("index reload failed", "err", err)
+			}
+		}
+	}
+}
+
+// flushLoop calls pw.Flush() every interval until ctx is cancelled. This
+// is the periodic counterpart to the flushBySize / flushByTime check that
+// lives inside Write() — without this loop, sparse traffic would leave
+// rows buffered in memory until either 1024 events accumulated or the
+// file rotated, leaving recent logs invisible to /query.
+func flushLoop(ctx context.Context, pw *parquet.Writer, interval time.Duration, logger *slog.Logger) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := pw.Flush(); err != nil {
+				logger.Warn("periodic parquet flush failed", "err", err)
 			}
 		}
 	}
