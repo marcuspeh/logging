@@ -31,6 +31,10 @@ export interface LogFile {
   size_bytes: number;
 }
 
+// /projects response — sorted, deduplicated set of project names across
+// all loaded index entries. Used to populate the project autocomplete.
+export type ProjectsResponse = string[];
+
 // Parameters accepted by /query (see parseQuery in server.go).
 export interface QueryParams {
   project?: string;

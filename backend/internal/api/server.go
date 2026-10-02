@@ -38,6 +38,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/healthz", s.handleHealth)
 	r.Get("/query", s.handleQuery)
 	r.Get("/files", s.handleFiles)
+	r.Get("/projects", s.handleProjects)
 	return r
 }
 
@@ -72,6 +73,13 @@ func (s *Server) Run(ctx context.Context, addr string, shutdownGrace time.Durati
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleProjects returns the hardcoded list of known project names.
+// The frontend uses this to populate the project autocomplete; users
+// can still type custom values.
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, []string{"algo01-corner2rsi"})
 }
 
 type fileEntry struct {

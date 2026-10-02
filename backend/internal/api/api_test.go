@@ -324,6 +324,22 @@ func TestHTTPHandlers(t *testing.T) {
 		t.Errorf("files status = %d, want 200", resp.StatusCode)
 	}
 	resp.Body.Close()
+
+	resp, err = http.Get(ts.URL + "/projects")
+	if err != nil {
+		t.Fatalf("GET /projects: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("projects status = %d, want 200", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+	var projects []string
+	if err := json.NewDecoder(resp.Body).Decode(&projects); err != nil {
+		t.Fatalf("decode projects: %v", err)
+	}
+	if len(projects) != 1 || projects[0] != "algo01-corner2rsi" {
+		t.Errorf("projects = %v, want [algo01-corner2rsi]", projects)
+	}
 }
 
 func TestHTTPHealthzViaRun(t *testing.T) {

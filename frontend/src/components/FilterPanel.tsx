@@ -3,6 +3,7 @@ import clsx from "clsx";
 import type { FormEvent } from "react";
 import { LEVELS, type Level, type QueryParams } from "../api/types";
 import { levelClasses } from "../utils/format";
+import { useProjects } from "../hooks/useProjects";
 import { TimeRangePicker } from "./TimeRangePicker";
 
 interface Props {
@@ -30,6 +31,9 @@ export function FilterPanel({
   isFetching,
   enabled,
 }: Props) {
+  const projectsQuery = useProjects();
+  const projects = projectsQuery.data ?? [];
+
   const toggleLevel = (lvl: Level) => {
     onApply({ level: draft.level === lvl ? undefined : lvl });
   };
@@ -49,11 +53,17 @@ export function FilterPanel({
           id="f-project"
           type="text"
           autoComplete="off"
+          list="known-projects"
           placeholder="e.g. billing-service"
           value={draft.project ?? ""}
           onChange={(e) => onUpdateDraft({ project: e.target.value || undefined })}
           className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
         />
+        <datalist id="known-projects">
+          {projects.map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
       </div>
 
       <div className="space-y-1">
