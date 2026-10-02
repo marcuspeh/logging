@@ -11,24 +11,29 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/marcuspeh/logging-backend/internal/configstore"
 )
 
 // Server is the HTTP front-end for queries.
 type Server struct {
-	loader *IndexLoader
-	engine *Engine
-	logger *slog.Logger
+	loader   *IndexLoader
+	engine   *Engine
+	projects *configstore.ProjectsProvider
+	logger   *slog.Logger
 }
 
-// NewServer wires the HTTP routes against the given loader.
-func NewServer(loader *IndexLoader, logger *slog.Logger) *Server {
+// NewServer wires the HTTP routes against the given loader. The
+// projects provider may be nil — handleProjects will then 503.
+func NewServer(loader *IndexLoader, projects *configstore.ProjectsProvider, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Server{
-		loader: loader,
-		engine: NewEngine(loader, logger),
-		logger: logger,
+		loader:   loader,
+		engine:   NewEngine(loader, logger),
+		projects: projects,
+		logger:   logger,
 	}
 }
 
@@ -75,11 +80,24 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleProjects returns the hardcoded list of known project names.
-// The frontend uses this to populate the project autocomplete; users
-// can still type custom values.
+// handleProjects returns the project list read from config_store. The
+// frontend uses this to populate the project autocomplete; users can
+// still type custom values that aren't in the list.
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, []string{"algo01-corner2rsi"})
+	if s.projects == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("config_store is not configured"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	projects, err := s.projects.List(ctx)
+	if err != nil {
+		s.logger.Error("fetch projects from config_store failed", "err", err)
+		writeError(w, http.StatusBadGateway, fmt.Errorf("fetch projects: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, projects)
 }
 
 type fileEntry struct {

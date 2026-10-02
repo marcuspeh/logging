@@ -47,6 +47,8 @@ func TestLoadOverrides(t *testing.T) {
 		"PARQUET_ROTATE_BYTES": "1024",
 		"HTTP_ADDR":            ":9000",
 		"SHUTDOWN_TIMEOUT":     "5s",
+		"CONFIG_STORE_URL":     "http://config-store:6002",
+		"CONFIG_STORE_PROJECT": "logging-service",
 	})
 
 	cfg, err := Load()
@@ -74,6 +76,12 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != 5*time.Second {
 		t.Errorf("ShutdownTimeout = %s, want %s", cfg.ShutdownTimeout, 5*time.Second)
+	}
+	if cfg.ConfigStoreURL != "http://config-store:6002" {
+		t.Errorf("ConfigStoreURL = %q, want %q", cfg.ConfigStoreURL, "http://config-store:6002")
+	}
+	if cfg.ConfigStoreProject != "logging-service" {
+		t.Errorf("ConfigStoreProject = %q, want %q", cfg.ConfigStoreProject, "logging-service")
 	}
 }
 

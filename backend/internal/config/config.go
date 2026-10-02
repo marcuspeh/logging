@@ -29,6 +29,8 @@ type Config struct {
 	RetentionInterval      time.Duration
 	CompactionInterval     time.Duration
 	CompactionMaxFileBytes int64
+	ConfigStoreURL         string
+	ConfigStoreProject     string
 }
 
 // Defaults returns the default configuration used when no env overrides are
@@ -49,6 +51,8 @@ func Defaults() Config {
 		RetentionInterval:      1 * time.Hour,
 		CompactionInterval:     24 * time.Hour,
 		CompactionMaxFileBytes: 64 * 1024 * 1024,
+		ConfigStoreURL:         "http://localhost:8001",
+		ConfigStoreProject:     "logging-service",
 	}
 }
 
@@ -168,6 +172,12 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("config: COMPACTION_MAX_FILE_BYTES must be > 0, got %d", n)
 		}
 		cfg.CompactionMaxFileBytes = n
+	}
+	if v := os.Getenv("CONFIG_STORE_URL"); v != "" {
+		cfg.ConfigStoreURL = v
+	}
+	if v := os.Getenv("CONFIG_STORE_PROJECT"); v != "" {
+		cfg.ConfigStoreProject = v
 	}
 	return cfg, nil
 }

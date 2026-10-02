@@ -19,6 +19,7 @@ import (
 
 	"github.com/marcuspeh/logging-backend/internal/api"
 	"github.com/marcuspeh/logging-backend/internal/config"
+	"github.com/marcuspeh/logging-backend/internal/configstore"
 	"github.com/marcuspeh/logging-backend/internal/consumer"
 	"github.com/marcuspeh/logging-backend/internal/parquet"
 )
@@ -122,6 +123,8 @@ func run(logger *slog.Logger) error {
 		"retention_interval", cfg.RetentionInterval,
 		"compaction_interval", cfg.CompactionInterval,
 		"compaction_max_file_bytes", cfg.CompactionMaxFileBytes,
+		"config_store_url", cfg.ConfigStoreURL,
+		"config_store_project", cfg.ConfigStoreProject,
 	)
 
 	pw, err := parquet.New(cfg.ParquetDir, parquet.FlushOptions{
@@ -151,7 +154,13 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	srv := api.NewServer(loader, logger.With("component", "api"))
+	projects := configstore.NewProjectsProviderFromConfig(
+		cfg.ConfigStoreURL,
+		cfg.ConfigStoreProject,
+		logger.With("component", "configstore"),
+	)
+
+	srv := api.NewServer(loader, projects, logger.With("component", "api"))
 
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

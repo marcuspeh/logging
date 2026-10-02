@@ -278,7 +278,7 @@ func TestHTTPHandlers(t *testing.T) {
 		makeEvent(base, "billing", "req-1", "INFO", "ok"),
 	}, 1<<20)
 	loader, _ := NewIndexLoader(dir, nil)
-	srv := NewServer(loader, nil)
+	srv := NewServer(loader, projectsFromJSON(`["algo01-corner2rsi"]`), nil)
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()
 
@@ -345,7 +345,7 @@ func TestHTTPHandlers(t *testing.T) {
 func TestHTTPHealthzViaRun(t *testing.T) {
 	dir := t.TempDir()
 	loader, _ := NewIndexLoader(dir, nil)
-	srv := NewServer(loader, nil)
+	srv := NewServer(loader, nil, nil)
 
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()
@@ -365,7 +365,7 @@ func TestHTTPHealthzViaRun(t *testing.T) {
 func TestRunGracefulShutdown(t *testing.T) {
 	dir := t.TempDir()
 	loader, _ := NewIndexLoader(dir, nil)
-	srv := NewServer(loader, nil)
+	srv := NewServer(loader, nil, nil)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
