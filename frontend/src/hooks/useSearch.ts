@@ -11,7 +11,7 @@ const PAGE_SIZE = 200;
 // *executed* query, syncs them to the URL (so views are shareable +
 // back-button works), and exposes a TanStack Query bound to those
 // params. Free-text fields (project, logid) live in a separate `draft`
-// so the query only fires when the user commits via Enter / Search.
+// so the query only fires when the user commits by clicking Search.
 //
 // Pagination model:
 //   - The first fetch is `limit=PAGE_SIZE, offset=0`.

@@ -8,8 +8,8 @@ import { extractErrorMessage } from "../api/client";
 
 // QueryPage is the only screen for now. It composes the filter panel
 // and results table around the URL-synced useSearch hook. Free-text
-// fields (project, logid) only commit on Enter / Search; structural
-// filters apply immediately.
+// fields (project, logid) only commit when Search is clicked;
+// structural filters apply immediately.
 //
 // Pagination:
 //   - First fetch returns 200 rows.
@@ -72,7 +72,7 @@ export function QueryPage() {
                 </span>
               )
             ) : (
-              <span className="text-slate-500">Enter a filter and press Enter to search.</span>
+              <span className="text-slate-500">Enter a filter and click Search.</span>
             )}
           </div>
           {enabled ? (
@@ -128,7 +128,7 @@ export function QueryPage() {
         {!enabled ? (
           <EmptyState
             title="Start by filtering"
-            hint="Type a project name or a log id, then press Enter."
+            hint="Type a project name or a log id, then click Search."
           />
         ) : null}
       </section>

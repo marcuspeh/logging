@@ -1,6 +1,6 @@
 import { Search, X } from "lucide-react";
 import clsx from "clsx";
-import type { FormEvent, KeyboardEvent } from "react";
+import type { FormEvent } from "react";
 import { LEVELS, type Level, type QueryParams } from "../api/types";
 import { levelClasses } from "../utils/format";
 import { TimeRangePicker } from "./TimeRangePicker";
@@ -17,9 +17,9 @@ interface Props {
 }
 
 // FilterPanel owns the form chrome for the query. Free-text fields
-// (project, logid) only update the draft until the user presses Enter
-// or clicks Search; structural filters (level, time range, order) apply
-// immediately so picking a level chip already narrows the results.
+// (project, logid) only update the draft until the user clicks Search;
+// structural filters (level, time range, order) apply immediately so
+// picking a level chip already narrows the results.
 // Page size is fixed in useSearch and not user-configurable here.
 export function FilterPanel({
   draft,
@@ -32,13 +32,6 @@ export function FilterPanel({
 }: Props) {
   const toggleLevel = (lvl: Level) => {
     onApply({ level: draft.level === lvl ? undefined : lvl });
-  };
-
-  const handleEnter = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      onCommit();
-    }
   };
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -59,7 +52,6 @@ export function FilterPanel({
           placeholder="e.g. billing-service"
           value={draft.project ?? ""}
           onChange={(e) => onUpdateDraft({ project: e.target.value || undefined })}
-          onKeyDown={handleEnter}
           className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
         />
       </div>
@@ -75,7 +67,6 @@ export function FilterPanel({
           placeholder="correlation id"
           value={draft.logid ?? ""}
           onChange={(e) => onUpdateDraft({ logid: e.target.value || undefined })}
-          onKeyDown={handleEnter}
           className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
         />
       </div>
@@ -139,11 +130,7 @@ export function FilterPanel({
       {!enabled ? (
         <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
           Set <span className="font-mono">project</span> or{" "}
-          <span className="font-mono">logid</span> and press{" "}
-          <kbd className="rounded border border-amber-300 bg-white px-1 font-mono text-[10px]">
-            Enter
-          </kbd>{" "}
-          or click Search.
+          <span className="font-mono">logid</span>, then click Search.
         </p>
       ) : null}
 
