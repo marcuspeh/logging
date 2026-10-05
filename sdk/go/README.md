@@ -53,6 +53,10 @@ project land on the same partition.
 // Construction
 func New(bootstrap, project string, opts ...Option) (*Client, error)
 
+// Correlation id
+func NewLogID() string                        // "yyyymmdd-hhmm-postfix"
+func WithLogID(ctx context.Context, id string) context.Context
+
 // Sending
 func (c *Client) Log (ctx context.Context, level Level, format string, args ...any) error
 func (c *Client) Debug(ctx context.Context, format string, args ...any) error
@@ -108,6 +112,20 @@ func withLogID(next http.Handler) http.Handler {
 
 If you don't set one, `logidFromCtx` returns `"-"` — searchable in the
 query API but obviously less useful.
+
+`NewLogID()` generates one for you: `yyyymmdd-hhmm-postfix`, e.g.
+`"20261005-1430-k3f9qz"`. The prefix is UTC (matching the event
+timestamps the query UI renders) and sorts chronologically as a
+string, so a log id alone tells you when a burst of logs happened. The
+6-char random postfix keeps ids unique within the same minute.
+
+```go
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+    id := loggingsdk.NewLogID()
+    ctx := loggingsdk.WithLogID(r.Context(), id)
+    // ... also stash id on the response for support tickets
+}
+```
 
 ## slog adapter
 

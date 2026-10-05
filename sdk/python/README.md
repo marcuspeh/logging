@@ -43,6 +43,22 @@ def handle_request(raw_id: str) -> None:
 If `log_id_var` is unset (or holds an empty/non-string value), the SDK
 falls back to `"unknown"`.
 
+`loggingsdk.new_log_id()` generates one for you:
+`yyyymmdd-hhmm-postfix`, e.g. `"20261005-1430-k3f9qz"`. The prefix is
+UTC (matching the event timestamps the query UI renders) and sorts
+chronologically as a string, so a log id alone tells you when a burst
+of logs happened. The 6-char random postfix keeps ids unique within
+the same minute.
+
+```python
+def handle_request() -> None:
+    token = loggingsdk.log_id_var.set(loggingsdk.new_log_id())
+    try:
+        client.info("charge succeeded")
+    finally:
+        loggingsdk.log_id_var.reset(token)
+```
+
 `project` is used as the Kafka message key so all events for one
 project land on the same partition.
 

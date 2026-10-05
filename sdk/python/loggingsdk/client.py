@@ -4,6 +4,7 @@ import contextvars
 import inspect
 import json
 import queue
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -37,6 +38,27 @@ def current_log_id() -> str:
     if isinstance(v, str) and v:
         return v
     return "unknown"
+
+
+_LOG_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
+_LOG_ID_POSTFIX_LEN = 6
+
+
+def new_log_id() -> str:
+    """Return a fresh correlation id shaped ``yyyymmdd-hhmm-postfix``.
+
+    e.g. ``"20261005-1430-k3f9qz"``.
+
+    The datetime prefix is UTC, matching the event timestamps the query
+    UI renders, so an id alone tells you when a burst of logs happened
+    and sorts chronologically as a string. The random postfix keeps
+    ids unique within the same minute. Bind the result with
+    :data:`log_id_var`.
+    """
+    postfix = "".join(
+        secrets.choice(_LOG_ID_ALPHABET) for _ in range(_LOG_ID_POSTFIX_LEN)
+    )
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M") + "-" + postfix
 
 
 @dataclass

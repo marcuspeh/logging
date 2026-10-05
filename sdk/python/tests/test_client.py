@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import contextvars
 import json
+import re
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -13,6 +15,7 @@ from loggingsdk import (
     ParseLevel,
     current_log_id,
     log_id_var,
+    new_log_id,
 )
 
 
@@ -60,6 +63,35 @@ def bound_log_id():
 
 
 # ---- current_log_id / log_id_var -----------------------------------------
+
+
+def test_new_log_id_shape():
+    assert re.fullmatch(r"\d{8}-\d{4}-[0-9a-z]{6}", new_log_id())
+
+
+def test_new_log_id_prefix_is_current_utc_minute():
+    before = datetime.now(timezone.utc) - timedelta(minutes=1)
+    after = datetime.now(timezone.utc) + timedelta(minutes=1)
+    prefix = new_log_id()[:13]
+    lo = before.strftime("%Y%m%d-%H%M")
+    hi = after.strftime("%Y%m%d-%H%M")
+    assert lo <= prefix <= hi, f"prefix {prefix!r} outside [{lo!r}, {hi!r}]"
+
+
+def test_new_log_id_postfix_is_unique():
+    ids = {new_log_id() for _ in range(1000)}
+    assert len(ids) == 1000
+
+
+def test_new_log_id_flows_into_payload(fake: FakeProducer):
+    c = Client("k:9092", "p", producer=fake)
+    id_ = new_log_id()
+    token = log_id_var.set(id_)
+    try:
+        c.info("hi")
+    finally:
+        log_id_var.reset(token)
+    assert json.loads(fake.messages[0][2])["logid"] == id_
 
 
 def test_current_log_id_unset_returns_unknown():

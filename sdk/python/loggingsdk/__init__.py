@@ -9,7 +9,14 @@ Go SDK's constant.
 """
 
 from .levels import Level, ParseLevel
-from .client import Client, Stats, current_log_id, log_id_var, LOG_ID_KEY
+from .client import (
+    Client,
+    Stats,
+    current_log_id,
+    log_id_var,
+    new_log_id,
+    LOG_ID_KEY,
+)
 from .producer import Producer, ConfluentProducer
 from .handler import LoggingHandler
 
@@ -24,4 +31,5 @@ __all__ = [
     "Stats",
     "current_log_id",
     "log_id_var",
+    "new_log_id",
 ]
