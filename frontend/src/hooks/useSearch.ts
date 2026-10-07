@@ -1,17 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { searchLogs } from "../api/logs";
 import type { LogQueryResponse, LogRow, QueryParams } from "../api/types";
-import { fromSearchParams, toSearchParams } from "../utils/url";
 
 // Initial page size for the first request and every "Load more" click.
 const PAGE_SIZE = 200;
 
-// useSearch keeps QueryParams as the single source of truth for the
-// *executed* query, syncs them to the URL (so views are shareable +
-// back-button works), and exposes a TanStack Query bound to those
-// params. Free-text fields (project, logid) live in a separate `draft`
-// so the query only fires when the user commits by clicking Search.
+// useSearch owns the *executed* query against the backend. URL state is
+// owned by the caller (QueryPage) — this hook reads it as inputs and
+// never writes to the URL. Free-text fields (project, logid) live in a
+// separate `draft` so callers can mirror them to inputs without
+// triggering a refetch; `apply` commits them.
 //
 // Pagination model:
 //   - The first fetch is `limit=PAGE_SIZE, offset=0`.
@@ -22,16 +21,16 @@ const PAGE_SIZE = 200;
 //     `loadedCount` is what we've rendered so far. The UI uses these to
 //     show "Showing N of M" + a "Load more" button when loaded < total.
 export function useSearch() {
-  // Hydrate initial params from the URL once.
-  const initial = useMemo(() => {
-    const parsed = fromSearchParams(window.location.search);
-    return { ...parsed, limit: PAGE_SIZE, offset: 0 };
-  }, []);
-
   // params: what the next query will run against (offset bumps on load more).
   // draft: what the inputs currently show.
-  const [params, setParams] = useState<QueryParams>(initial);
-  const [draft, setDraft] = useState<QueryParams>(initial);
+  const [params, setParams] = useState<QueryParams>({
+    limit: PAGE_SIZE,
+    offset: 0,
+  });
+  const [draft, setDraft] = useState<QueryParams>({
+    limit: PAGE_SIZE,
+    offset: 0,
+  });
 
   // Accumulated rows across pages of the same filter set. Reset on
   // filter change (see replaceParams below).
@@ -39,16 +38,7 @@ export function useSearch() {
   const [totalCount, setTotalCount] = useState(0);
   // Filter signature: changes when any committed filter changes.
   // Used to decide whether a new fetch should replace or append.
-  const [filterSig, setFilterSig] = useState<string>(signature(initial));
-
-  // Reflect params into the URL whenever they change. Use replaceState
-  // so the back button isn't polluted by every keystroke / load-more.
-  useEffect(() => {
-    const sp = toSearchParams(params);
-    const qs = sp.toString();
-    const url = qs ? `?${qs}` : window.location.pathname;
-    window.history.replaceState(null, "", url);
-  }, [params]);
+  const [filterSig, setFilterSig] = useState<string>(signature(params));
 
   const enabled = Boolean(params.project || params.logid);
 
@@ -76,8 +66,6 @@ export function useSearch() {
     setTotalCount(query.data.count);
   }, [query.data, params, filterSig]);
 
-  const commit = useCallback(() => setParams(draft), [draft]);
-
   const apply = useCallback((patch: Partial<QueryParams>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
     setParams((prev) => ({ ...prev, ...patch }));
@@ -101,6 +89,7 @@ export function useSearch() {
     setDraft({ limit: PAGE_SIZE, offset: 0 });
     setRows([]);
     setTotalCount(0);
+    setFilterSig(signature({ limit: PAGE_SIZE, offset: 0 }));
   }, []);
 
   const hasMore = rows.length < totalCount;
@@ -108,7 +97,6 @@ export function useSearch() {
   return {
     draft,
     params,
-    commit,
     apply,
     updateDraft,
     reset,
