@@ -89,17 +89,25 @@ function LevelBadge({ level }: { level: string }) {
   );
 }
 
-// Compute a short, fixed-width HH:MM:SS.mmm string in the local zone.
-function shortTime(iso: string): string {
+// Format an ISO timestamp as separate date (YYYY-MM-DD) and time
+// (HH:MM:SS.mmm) strings in the local zone. Returns the raw ISO on
+// parse failure.
+function shortTime(iso: string): { date: string; time: string } {
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString(undefined, {
+  if (isNaN(d.getTime())) return { date: iso, time: "" };
+  const date = d.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const time = d.toLocaleTimeString(undefined, {
     hour12: false,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     fractionalSecondDigits: 3,
   });
+  return { date, time };
 }
 
 // Build a synthetic JSON payload from a LogRow so the expanded panel
@@ -472,7 +480,10 @@ export function QueryPage() {
                   {/* Header row */}
                   <div className="flex items-start gap-4">
                     <div className="flex items-center gap-3 w-44 flex-shrink-0 pt-0.5">
-                      <span className="text-slate-400 text-xs">{timeStr}</span>
+                      <span className="text-slate-400 text-xs leading-tight">
+                        <span className="block">{timeStr.date}</span>
+                        <span className="block">{timeStr.time}</span>
+                      </span>
                       <LevelBadge level={row.level} />
                     </div>
                     <div className="flex-1 min-w-0 flex flex-col gap-1.5">
