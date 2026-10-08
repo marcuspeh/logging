@@ -121,7 +121,7 @@ function syntheticPayload(row: LogRow): string {
 }
 
 // QueryPage is the single page of the app. It mirrors the prototype's
-// "Argos Logs" module: top filter bar with PSM / Log ID / Level /
+// "Argos Logs" module: top filter bar with service / Log ID / Level /
 // Time-range, then a virtualized-free list of expandable log rows
 // showing metadata + a JSON payload panel when expanded.
 //
@@ -133,7 +133,7 @@ function syntheticPayload(row: LogRow): string {
 //     + time range). We pass those to the backend.
 //   * The level filter is applied client-side on top of the result so
 //     it doesn't force a refetch when toggled.
-//   * The PSM dropdown's "free text" matches the backend's `project`
+//   * The service dropdown's "free text" matches the backend's `project`
 //     field; suggestions come from the /projects endpoint.
 export function QueryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -189,7 +189,7 @@ export function QueryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [psmFilter, levelFilter, logIdFilter, fromFilter, toFilter]);
 
-  // PSM suggestions come from the backend's /projects endpoint.
+  // Service suggestions come from the backend's /projects endpoint.
   const projectsQuery = useProjects();
   const projectOptions = projectsQuery.data ?? [];
 
@@ -240,7 +240,7 @@ export function QueryPage() {
   }, [expandedId]);
 
   const [psmOpen, setPsmOpen] = useState(false);
-  // Track the PSM blur timer so we can cancel it on unmount / re-focus
+  // Track the service blur timer so we can cancel it on unmount / re-focus
   // and avoid setState on an unmounted component.
   const psmBlurTimer = useRef<number | null>(null);
   useEffect(() => {
@@ -323,20 +323,11 @@ export function QueryPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          {/* Log ID */}
-          <Input
-            icon={<Search className="w-4 h-4" />}
-            placeholder="Search Log ID..."
-            value={logIdFilter}
-            onChange={(e) => updateParams("logId", e.target.value)}
-            className="font-mono text-sm"
-          />
-
-          {/* PSM with suggestions */}
+          {/* Service (formerly PSM) with suggestions */}
           <div className="relative">
             <Input
               icon={<Terminal className="w-4 h-4" />}
-              placeholder="Search or type PSM..."
+              placeholder="Search or type service..."
               value={psmFilter === "all" ? "" : psmFilter}
               onChange={(e) => updateParams("psm", e.target.value)}
               onFocus={() => {
@@ -350,13 +341,19 @@ export function QueryPage() {
                   setPsmOpen(false);
                 }
               }}
+              showClear
+              onClear={() => {
+                cancelPsmClose();
+                setPsmOpen(false);
+                updateParams("psm", "");
+              }}
               className="font-mono text-sm"
             />
             {psmOpen ? (
               <div className="absolute top-full left-0 w-full mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-20 font-mono text-sm ring-1 ring-slate-900/5">
                 {!psmFilter && projectOptions.length > 0 ? (
                   <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-400 bg-slate-50 border-b border-slate-100 font-bold sticky top-0">
-                    Suggested PSMs
+                    Suggested services
                   </div>
                 ) : null}
                 {projectOptions
@@ -384,6 +381,17 @@ export function QueryPage() {
               </div>
             ) : null}
           </div>
+
+          {/* Log ID */}
+          <Input
+            icon={<Search className="w-4 h-4" />}
+            placeholder="Search Log ID..."
+            value={logIdFilter}
+            onChange={(e) => updateParams("logId", e.target.value)}
+            showClear
+            onClear={() => updateParams("logId", "")}
+            className="font-mono text-sm"
+          />
 
           {/* Level */}
           <Select
@@ -441,7 +449,7 @@ export function QueryPage() {
           <div className="py-24 text-center text-slate-500 font-sans flex flex-col items-center justify-center">
             <Terminal className="w-12 h-12 mb-4 text-slate-300" />
             <p className="text-lg font-medium text-slate-700">No filters set</p>
-            <p className="text-sm mt-1">Type a PSM or Log ID to start.</p>
+            <p className="text-sm mt-1">Type a service or Log ID to start.</p>
           </div>
         ) : filteredRows.length > 0 ? (
           <div className="min-w-[800px] flex flex-col font-mono text-sm divide-y divide-slate-100 pb-8">
@@ -475,7 +483,7 @@ export function QueryPage() {
                             updateParams("psm", row.project);
                           }}
                           className="font-semibold text-blue-600 flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 cursor-pointer transition-colors px-2 py-0.5 rounded border border-blue-100"
-                          title="Filter by this PSM"
+                          title="Filter by this service"
                         >
                           <Terminal className="w-3 h-3" /> {row.project}
                         </span>
