@@ -23,6 +23,7 @@ type Config struct {
 	ParquetRotateEvery     time.Duration
 	ParquetFlushRows       int64
 	ParquetFlushEvery      time.Duration
+	ParquetTailMaxRows     int
 	HTTPAddr               string
 	ShutdownTimeout        time.Duration
 	Retention              time.Duration
@@ -45,6 +46,7 @@ func Defaults() Config {
 		ParquetRotateEvery:     5 * time.Minute,
 		ParquetFlushRows:       1024,
 		ParquetFlushEvery:      5 * time.Second,
+		ParquetTailMaxRows:     4096,
 		HTTPAddr:               ":8080",
 		ShutdownTimeout:        10 * time.Second,
 		Retention:              14 * 24 * time.Hour,
@@ -119,6 +121,16 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("config: PARQUET_FLUSH_EVERY must be > 0, got %s", d)
 		}
 		cfg.ParquetFlushEvery = d
+	}
+	if v := os.Getenv("PARQUET_TAIL_MAX_ROWS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return cfg, fmt.Errorf("config: PARQUET_TAIL_MAX_ROWS=%q is not a valid integer: %w", v, err)
+		}
+		if n <= 0 {
+			return cfg, fmt.Errorf("config: PARQUET_TAIL_MAX_ROWS must be > 0, got %d", n)
+		}
+		cfg.ParquetTailMaxRows = n
 	}
 	if v := os.Getenv("HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v

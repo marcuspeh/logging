@@ -61,6 +61,19 @@ type Writer struct {
 	maxTs       time.Time
 	projects    map[string]struct{}
 	seq         int
+
+	// tail holds events that are not yet sealed into a Parquet file.
+	// parquet-go only writes a valid footer on Close, so a sealed file is
+	// the unit of durability. Previously "make rows queryable" was
+	// implemented by sealing a whole new file on every flush, which made
+	// the file count track wall-clock time rather than data volume.
+	// Instead, recent events are served from this buffer and files are
+	// sealed only on rotateBytes / rotateEvery / tail overflow.
+	// tailMu is separate from mu so queries can read the tail without
+	// blocking ingestion.
+	tailMu      sync.RWMutex
+	tail        []model.LogEvent
+	tailMaxRows int
 }
 
 // FlushOptions controls how Write batches events into durable rows on
@@ -74,7 +87,18 @@ type FlushOptions struct {
 	RotateEvery time.Duration // rotate when active file is this old (0 = disabled)
 	FlushRows   int64         // flush parquet row group + sidecar after N rows
 	FlushEvery  time.Duration // flush parquet row group + sidecar after this duration
+
+	// TailMaxRows bounds the in-memory buffer of not-yet-sealed events.
+	// When it fills, the writer seals a file regardless of the rotation
+	// timers, so memory stays bounded under sustained load. 0 selects
+	// defaultTailMaxRows.
+	TailMaxRows int
 }
+
+// defaultTailMaxRows bounds the not-yet-sealed event buffer to a few
+// thousand rows, which keeps recent logs queryable while sealing files on
+// a data-volume basis rather than a wall-clock basis.
+const defaultTailMaxRows = 4096
 
 // New opens the first Parquet file in dir and returns a ready-to-use Writer.
 // If dir does not exist it is created with mode 0o755.
@@ -94,6 +118,9 @@ func New(dir string, opts FlushOptions) (*Writer, error) {
 	if opts.FlushEvery <= 0 {
 		return nil, fmt.Errorf("parquet: FlushEvery must be > 0, got %s", opts.FlushEvery)
 	}
+	if opts.TailMaxRows <= 0 {
+		opts.TailMaxRows = defaultTailMaxRows
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("parquet: mkdir %s: %w", dir, err)
 	}
@@ -104,8 +131,14 @@ func New(dir string, opts FlushOptions) (*Writer, error) {
 		rotateEvery: opts.RotateEvery,
 		flushRows:   opts.FlushRows,
 		flushEvery:  opts.FlushEvery,
+		tailMaxRows: opts.TailMaxRows,
 		projects:    make(map[string]struct{}),
 	}
+	// Seed the sequence counter from what's already on disk so we never
+	// collide with a file left behind by a previous process. This is the
+	// only directory scan the writer performs; openNewFile increments w.seq
+	// in memory afterwards, so each subsequent rotation is O(1).
+	w.seq = nextSeq(dir, time.Now().UTC().Unix())
 	if err := w.openNewFile(); err != nil {
 		return nil, err
 	}
@@ -124,6 +157,14 @@ func (w *Writer) Write(ev model.LogEvent) error {
 	if _, err := w.out.Write([]model.LogEvent{ev}); err != nil {
 		return fmt.Errorf("parquet: write row: %w", err)
 	}
+
+	// Mirror the row into the not-yet-sealed tail so queries can serve
+	// recent events without waiting for a file seal. tailFull is computed
+	// under the tail mutex so the check matches the appended length.
+	w.tailMu.Lock()
+	w.tail = append(w.tail, ev)
+	tailFull := len(w.tail) >= w.tailMaxRows
+	w.tailMu.Unlock()
 
 	w.currentSize += approxRowBytes(ev)
 	w.rowCount++
@@ -147,6 +188,15 @@ func (w *Writer) Write(ev model.LogEvent) error {
 		if err := w.flushLocked(); err != nil {
 			return fmt.Errorf("parquet: flush: %w", err)
 		}
+	}
+
+	// Seal when the tail buffer is full. This keeps memory bounded and
+	// makes the file size track ingest volume instead of elapsed time.
+	if tailFull {
+		if err := w.rotateLocked(); err != nil {
+			return fmt.Errorf("parquet: rotate: %w", err)
+		}
+		return nil
 	}
 
 	// Rotation triggers. Time-based rotation only fires when the active
@@ -191,6 +241,31 @@ func (w *Writer) Close() error {
 
 // Dir returns the directory the writer writes into.
 func (w *Writer) Dir() string { return w.dir }
+
+// Tail returns a snapshot of events that have been accepted by Write
+// but not yet sealed into a Parquet file. The query API merges these
+// with the sealed files so recent logs stay visible without sealing a
+// file per flush. Returns nil if the buffer is empty. Safe for
+// concurrent use.
+func (w *Writer) Tail() []model.LogEvent {
+	w.tailMu.RLock()
+	defer w.tailMu.RUnlock()
+	if len(w.tail) == 0 {
+		return nil
+	}
+	out := make([]model.LogEvent, len(w.tail))
+	copy(out, w.tail)
+	return out
+}
+
+// resetTailLocked drops buffered not-yet-sealed events after they have
+// been durably sealed into a Parquet file. Caller must hold w.mu (or be
+// the seal path that already does).
+func (w *Writer) resetTailLocked() {
+	w.tailMu.Lock()
+	w.tail = w.tail[:0]
+	w.tailMu.Unlock()
+}
 
 // RotateBytes returns the byte threshold at which the writer rotates
 // files. Used by the compactor to size its batches.
@@ -280,10 +355,11 @@ func (w *Writer) SweepRetention(now time.Time, ttl time.Duration) (RetentionResu
 // accumulators. Caller must hold w.mu.
 func (w *Writer) openNewFile() error {
 	now := time.Now().UTC()
+	// w.seq is seeded once from disk in New() and bumped in memory on
+	// every rotation. Calling nextSeq here would re-scan the whole
+	// directory on every rotation, which is O(dirSize) per rotation and
+	// turns sustained ingest into quadratic I/O.
 	seq := w.seq
-	if s := nextSeq(w.dir, now.Unix()); s > seq {
-		seq = s
-	}
 	w.seq = seq + 1
 
 	name := fmt.Sprintf("%s%d-%04d.parquet", filePrefix, now.Unix(), seq)
@@ -353,33 +429,23 @@ func (w *Writer) rotateLocked() error {
 	return w.openNewFile()
 }
 
-// flushLocked makes the in-memory rows durable. The parquet-go
-// GenericWriter only persists rows to disk when its Close() is called
-// (it commits the current row group). Calling Flush() alone leaves
-// rows buffered in memory, so the on-disk file can stay at 0 bytes
-// even though we have in-memory rows. Calling Close() on the
-// GenericWriter while the file handle stays open is not supported by
-// parquet-go, so the simplest correct behaviour is to treat flush() as
-// a rotation when there are pending rows: close the parquet writer
-// (which writes the rows), close the file, write the sidecar, and open
-// a new active file. If there are no pending rows we just reset the
-// timer and return — no sidecar, no rotation.
+// flushLocked acknowledges pending rows. parquet-go only writes a valid
+// Parquet footer on Close, so a flush cannot publish rows to disk
+// without sealing the file. It used to seal on every flush, which
+// produced one tiny file per flushRows / flushEvery and made directory
+// scans, index reloads and compaction scale with wall-clock time
+// instead of data volume. Durability and visibility are now handled by
+// the tail buffer (recent rows) plus rotation (rotateBytes / rotateEvery
+// / tail overflow), so a flush just resets the acknowledgement counter.
 //
 // Caller must hold w.mu.
 func (w *Writer) flushLocked() error {
 	if w.out == nil || w.file == nil {
 		return nil
 	}
-	if w.rowCount == 0 || w.pendingRows == 0 {
-		// Nothing to persist. Avoid leaking empty files / sidecars.
-		w.pendingRows = 0
-		w.lastFlush = time.Now()
-		return nil
-	}
-	// Rotate: closeLocked will close the parquet writer (persisting the
-	// row group to disk), fsync, and write the sidecar. openNewFile
-	// then gives us a fresh active file for the next batch.
-	return w.rotateLocked()
+	w.pendingRows = 0
+	w.lastFlush = time.Now()
+	return nil
 }
 
 // closeLocked flushes, closes, fsyncs, and writes the sidecar index for the
@@ -427,6 +493,12 @@ func (w *Writer) closeLocked() error {
 		return err
 	}
 
+	// The sealed file now carries these rows, so drop them from the
+	// not-yet-sealed tail to avoid serving them twice. Do this only after
+	// the sidecar is durable; if the seal fails the rows stay in the tail
+	// and remain queryable.
+	w.resetTailLocked()
+
 	w.out = nil
 	w.file = nil
 	return nil
@@ -443,8 +515,9 @@ func writeIndex(parquetPath string, idx Index) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
+	// Compact JSON: these sidecars are re-read on every index Reload, so
+	// indentation would multiply the bytes read for no benefit.
 	enc := json.NewEncoder(tmp)
-	enc.SetIndent("", "  ")
 	if err := enc.Encode(idx); err != nil {
 		tmp.Close()
 		return fmt.Errorf("parquet: encode index: %w", err)

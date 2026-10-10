@@ -63,18 +63,32 @@ type Response struct {
 	Results []ResultRow `json:"results"`
 }
 
+// TailSource supplies events that have been accepted by the writer but
+// not yet sealed into a Parquet file. *parquet.Writer satisfies it.
+type TailSource interface {
+	Tail() []model.LogEvent
+}
+
 // Engine runs queries across an IndexLoader.
 type Engine struct {
 	loader *IndexLoader
 	logger *slog.Logger
+	tail   TailSource
 }
 
-// NewEngine constructs an Engine bound to a loader.
-func NewEngine(loader *IndexLoader, logger *slog.Logger) *Engine {
+// NewEngine constructs an Engine bound to a loader. An optional
+// TailSource may be supplied so events that are not yet sealed into a
+// Parquet file remain queryable. The variadic keeps existing call sites
+// (which pass only loader+logger) compiling unchanged.
+func NewEngine(loader *IndexLoader, logger *slog.Logger, tail ...TailSource) *Engine {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Engine{loader: loader, logger: logger}
+	e := &Engine{loader: loader, logger: logger}
+	if len(tail) > 0 {
+		e.tail = tail[0]
+	}
+	return e
 }
 
 // Execute runs q, returning up to q.Limit rows. Either q.Project or q.LogID
@@ -88,14 +102,20 @@ func NewEngine(loader *IndexLoader, logger *slog.Logger) *Engine {
 // it yet).
 func (e *Engine) Execute(q Query) (Response, error) {
 	entries := e.loader.Filter(q)
-	if len(entries) == 0 {
+	// Not-yet-sealed events live only in the writer's tail buffer, so the
+	// sealed-file index alone would miss the most recent logs.
+	var tailRows []model.LogEvent
+	if e.tail != nil {
+		tailRows = e.tail.Tail()
+	}
+	if len(entries) == 0 && len(tailRows) == 0 {
 		return Response{Count: 0, Results: []ResultRow{}}, nil
 	}
 
 	cursors := make([]cursor, 0, len(entries))
 	skipped := make([]string, 0)
 	for _, ent := range entries {
-		rows, err := readParquetRows(ent.Path)
+		rows, err := scanParquetRows(ent.Path, q)
 		if err != nil {
 			e.logger.Warn("skipping unreadable parquet file", "path", ent.Path, "err", err)
 			skipped = append(skipped, ent.Path)
@@ -141,6 +161,12 @@ func (e *Engine) Execute(q Query) (Response, error) {
 			all = append(all, r)
 		}
 	}
+	for _, r := range tailRows {
+		if !rowMatches(r, q) {
+			continue
+		}
+		all = append(all, r)
+	}
 
 	if q.Order == OrderAsc {
 		sort.Slice(all, func(i, j int) bool { return all[i].Timestamp.Before(all[j].Timestamp) })
@@ -174,16 +200,11 @@ type cursor struct {
 	rows []model.LogEvent
 }
 
-// readParquetRows decodes all rows from a Parquet file. parquet-go applies
-// dictionary + page filtering where possible.
-//
-// A quick magic-bytes check runs first; if the file is truncated or
-// hasn't been flushed yet, parquet-go would otherwise return the
-// cryptic "EOF" / "magic header" error we'd otherwise propagate.
-func readParquetRows(path string) ([]model.LogEvent, error) {
-	if err := parquet.Validate(path); err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
+// scanParquetRows returns only rows of a file matching q. It opens the
+// file once and prunes row groups using the timestamp column's index
+// statistics, so a narrow time window decodes only the row groups that
+// can contain matches instead of every row in the file.
+func scanParquetRows(path string, q Query) ([]model.LogEvent, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -193,16 +214,89 @@ func readParquetRows(path string) ([]model.LogEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := parquetgo.Read[model.LogEvent](f, st.Size())
+	pf, err := parquetgo.OpenFile(f, st.Size())
 	if err != nil {
-		// Convert any "EOF" / "magic" errors from parquet-go into our
-		// sentinel so the caller can decide to skip rather than fail.
-		if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "magic") {
-			return nil, fmt.Errorf("%w: %v", parquet.ErrFileUnreadable, err)
-		}
-		return nil, err
+		return nil, wrapScanErr(path, err)
 	}
-	return rows, nil
+
+	groups := pf.RowGroups()
+	selected := make([]parquetgo.RowGroup, 0, len(groups))
+	for _, g := range groups {
+		if rowGroupOverlaps(g, q) {
+			selected = append(selected, g)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, nil
+	}
+
+	// A RowGroup is not an io.ReaderAt, so read it via the row-group
+	// reader rather than parquetgo.Read (which needs ReaderAt+size).
+	rr := parquetgo.NewGenericRowGroupReader[model.LogEvent](parquetgo.MultiRowGroup(selected...))
+	defer rr.Close()
+
+	total := int(rr.NumRows())
+	if total <= 0 {
+		return nil, nil
+	}
+	buf := make([]model.LogEvent, total)
+	n := 0
+	for n < total {
+		read, rerr := rr.Read(buf[n:])
+		n += read
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			return nil, wrapScanErr(path, rerr)
+		}
+	}
+
+	out := make([]model.LogEvent, 0, n)
+	for _, r := range buf[:n] {
+		if rowMatches(r, q) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func wrapScanErr(path string, err error) error {
+	if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "magic") {
+		return fmt.Errorf("%w: %v", parquet.ErrFileUnreadable, err)
+	}
+	return fmt.Errorf("read %s: %w", path, err)
+}
+
+// rowGroupOverlaps reports whether a row group could hold a row inside
+// q's time window, using the timestamp leaf column's index statistics.
+// Absent statistics mean "might match", so rows are never wrongly dropped.
+func rowGroupOverlaps(g parquetgo.RowGroup, q Query) bool {
+	if q.From.IsZero() && q.To.IsZero() {
+		return true
+	}
+	chunks := g.ColumnChunks()
+	if len(chunks) == 0 {
+		return true
+	}
+	// Timestamp is the first field of LogEvent, so it is leaf column 0.
+	ci, err := chunks[0].ColumnIndex()
+	if err != nil || ci == nil || ci.NumPages() == 0 {
+		return true
+	}
+	// LogEvent maps time.Time to parquet Timestamp(Nanosecond), so the
+	// physical values are nanoseconds since the Unix epoch.
+	minV, maxV := ci.MinValue(0), ci.MaxValue(0)
+	if minV.IsNull() || maxV.IsNull() {
+		return true
+	}
+	if !q.From.IsZero() && maxV.Int64() < q.From.UnixNano() {
+		return false
+	}
+	if !q.To.IsZero() && minV.Int64() > q.To.UnixNano() {
+		return false
+	}
+	return true
 }
 
 // rowMatches applies the per-row filters the index can't fully enforce.

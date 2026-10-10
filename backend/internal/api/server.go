@@ -24,14 +24,17 @@ type Server struct {
 }
 
 // NewServer wires the HTTP routes against the given loader. The
-// projects provider may be nil — handleProjects will then 503.
-func NewServer(loader *IndexLoader, projects *configstore.ProjectsProvider, logger *slog.Logger) *Server {
+// projects provider may be nil — handleProjects will then 503. An
+// optional TailSource may be supplied so events that are not yet sealed
+// into a Parquet file are still queryable. The variadic keeps existing
+// call sites (which pass only loader+projects+logger) compiling.
+func NewServer(loader *IndexLoader, projects *configstore.ProjectsProvider, logger *slog.Logger, tail ...TailSource) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Server{
 		loader:   loader,
-		engine:   NewEngine(loader, logger),
+		engine:   NewEngine(loader, logger, tail...),
 		projects: projects,
 		logger:   logger,
 	}

@@ -132,6 +132,7 @@ func run(logger *slog.Logger) error {
 		RotateEvery: cfg.ParquetRotateEvery,
 		FlushRows:   cfg.ParquetFlushRows,
 		FlushEvery:  cfg.ParquetFlushEvery,
+		TailMaxRows: cfg.ParquetTailMaxRows,
 	})
 	if err != nil {
 		return err
@@ -160,7 +161,7 @@ func run(logger *slog.Logger) error {
 		logger.With("component", "configstore"),
 	)
 
-	srv := api.NewServer(loader, projects, logger.With("component", "api"))
+	srv := api.NewServer(loader, projects, logger.With("component", "api"), pw)
 
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

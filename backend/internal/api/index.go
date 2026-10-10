@@ -45,6 +45,22 @@ type IndexLoader struct {
 	// unreadableWarnInterval. Entries are pruned on every Reload().
 	lastUnreadableWarn     map[string]time.Time
 	unreadableWarnInterval time.Duration
+
+	// cache memoises parsed sidecars keyed by parquet path. Reload runs
+	// every indexReloadInterval; re-reading every sidecar and
+	// re-validating every parquet file on each tick is pure overhead,
+	// since sealed files are immutable. A hit whose mtime+size still
+	// match skips both the sidecar read and the magic-byte validation.
+	cache   map[string]cacheEntry
+	cacheMu sync.Mutex
+}
+
+// cacheEntry is a memoised sidecar parse plus the stat fingerprint used
+// to detect change.
+type cacheEntry struct {
+	entry   IndexEntry
+	modTime time.Time
+	size    int64
 }
 
 const defaultUnreadableWarnInterval = 5 * time.Minute
@@ -59,6 +75,7 @@ func NewIndexLoader(dir string, logger *slog.Logger) (*IndexLoader, error) {
 		logger:                 logger,
 		lastUnreadableWarn:     make(map[string]time.Time),
 		unreadableWarnInterval: defaultUnreadableWarnInterval,
+		cache:                  make(map[string]cacheEntry),
 	}
 	if err := l.Reload(); err != nil {
 		return nil, err
@@ -90,9 +107,30 @@ func (l *IndexLoader) Reload() error {
 	seen := make(map[string]struct{}, len(matches))
 
 	var entries []IndexEntry
+	// cacheMu is held for the whole pass: Reload is invoked from the
+	// periodic ticker AND from the background reload kicked off by
+	// Execute after a skipped file, so a per-iteration lock would
+	// still race the cache mutation with concurrent readers.
+	l.cacheMu.Lock()
+	defer l.cacheMu.Unlock()
 	for _, idxPath := range matches {
 		pqPath := strings.TrimSuffix(idxPath, ".idx.json")
 		seen[pqPath] = struct{}{}
+
+		// Unchanged mtime+size means our parsed copy is still valid:
+		// sealed parquet files are immutable, so the sidecar's
+		// fingerprint uniquely identifies the file's contents. Skip
+		// the JSON read and the magic-byte validation on hits.
+		fst, serr := os.Stat(idxPath)
+		if serr != nil {
+			return fmt.Errorf("api: stat %s: %w", idxPath, serr)
+		}
+		if hit, ok := l.cache[pqPath]; ok &&
+			hit.modTime.Equal(fst.ModTime()) && hit.size == fst.Size() {
+			l.clearUnreadableWarn(pqPath)
+			entries = append(entries, hit.entry)
+			continue
+		}
 
 		data, err := os.ReadFile(idxPath)
 		if err != nil {
@@ -115,7 +153,18 @@ func (l *IndexLoader) Reload() error {
 		// Path validated — clear any prior throttle entry so the next
 		// regression is loud.
 		l.clearUnreadableWarn(pqPath)
-		entries = append(entries, IndexEntry{Index: idx, Path: pqPath})
+		ent := IndexEntry{Index: idx, Path: pqPath}
+		l.cache[pqPath] = cacheEntry{entry: ent, modTime: fst.ModTime(), size: fst.Size()}
+		entries = append(entries, ent)
+	}
+
+	// Evict cache entries whose sidecar no longer exists (file deleted
+	// out from under us, e.g. by retention or an operator). Without
+	// this, Reload would carry stale entries forever.
+	for path := range l.cache {
+		if _, ok := seen[path]; !ok {
+			delete(l.cache, path)
+		}
 	}
 
 	// Prune rate-limit entries for paths that no longer have a sidecar

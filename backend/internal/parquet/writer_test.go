@@ -129,14 +129,13 @@ func TestCloseAfterWritesStillEmitsSidecar(t *testing.T) {
 	}
 }
 
-// TestFlushMakesPendingRowsDurable is a regression test for an
-// incident where the writer's flushLocked() called GenericWriter.Flush()
-// (which only flushes in-memory parquet page buffers) instead of closing
-// the writer. Result: sidecars were written with row_count > 0 and
-// valid timestamps, but the on-disk parquet file stayed at 0 bytes
-// because no row group had been committed. /query then returned 0
-// results — the data was in memory but invisible.
-func TestFlushMakesPendingRowsDurable(t *testing.T) {
+// TestFlushAcknowledgesRowsWithoutRotating pins the new durability
+// contract: Flush is now a cheap acknowledgement and must not seal a
+// file, since sealing on every flush drove file counts proportional to
+// wall-clock time. Rows remain visible via the tail buffer; they hit
+// disk on Rotate (or via Close). The previous version of this test
+// asserted the opposite behaviour.
+func TestFlushAcknowledgesRowsWithoutRotating(t *testing.T) {
 	dir := t.TempDir()
 	w, err := New(dir, testOpts(1024, 0))
 	if err != nil {
@@ -158,20 +157,37 @@ func TestFlushMakesPendingRowsDurable(t *testing.T) {
 		}
 	}
 
-	// Before Flush: pendingRows should be > 0, the file may or may not
-	// have data on disk.
 	if err := w.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	// After Flush: the active file from before Flush must be sealed
-	// with valid bytes and a correct sidecar.
+	// No sidecar should have been written by Flush — the file is
+	// still being written to and is not yet sealed.
 	matches, err := filepath.Glob(filepath.Join(dir, "*"+idxSuffix))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no sidecars after Flush, got %d", len(matches))
+	}
+
+	// Rows are still queryable from the tail buffer.
+	tail := w.Tail()
+	if len(tail) != 3 {
+		t.Fatalf("tail length = %d, want 3", len(tail))
+	}
+
+	// An explicit Rotate seals the file. This is the path that gives
+	// rows their durable sidecar.
+	if err := w.Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	matches, err = filepath.Glob(filepath.Join(dir, "*"+idxSuffix))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
 	if len(matches) != 1 {
-		t.Fatalf("expected exactly 1 sealed sidecar, got %d", len(matches))
+		t.Fatalf("expected exactly 1 sealed sidecar after Rotate, got %d", len(matches))
 	}
 	data, err := os.ReadFile(matches[0])
 	if err != nil {
@@ -187,15 +203,11 @@ func TestFlushMakesPendingRowsDurable(t *testing.T) {
 	if idx.SizeBytes == 0 {
 		t.Errorf("sealed size_bytes = 0, want > 0 (rows must be on disk)")
 	}
-	// The active file should be a *new* (zero-byte) file with no sidecar
-	// yet — proves the flush rotated rather than just buffered.
-	active := filepath.Join(dir, filepath.Base(w.currentPath))
-	if st, err := os.Stat(active); err != nil || st.Size() != 0 {
-		t.Errorf("expected new active file at 0 bytes after flush, got err=%v size=%d", err, st.Size())
-	}
-	activeSidecar := active + idxSuffix
-	if _, err := os.Stat(activeSidecar); !os.IsNotExist(err) {
-		t.Errorf("expected no sidecar for new active file, got err=%v", err)
+
+	// After Rotate, the tail should be drained so events aren't served
+	// from both the tail and the now-sealed file.
+	if tail := w.Tail(); len(tail) != 0 {
+		t.Errorf("tail length after Rotate = %d, want 0", len(tail))
 	}
 }
 
