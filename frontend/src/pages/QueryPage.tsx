@@ -129,7 +129,7 @@ function syntheticPayload(row: LogRow): string {
 }
 
 // QueryPage is the single page of the app. It mirrors the prototype's
-// "Argos Logs" module: top filter bar with service / Log ID / Level /
+// "Logging" module: top filter bar with service / Log ID / Level /
 // Time-range, then a virtualized-free list of expandable log rows
 // showing metadata + a JSON payload panel when expanded.
 //
@@ -311,7 +311,7 @@ export function QueryPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-slate-800">
             <Terminal className="w-5 h-5 text-blue-600" />
-            <h2 className="font-mono font-semibold tracking-wider">ARGOS LOGS</h2>
+            <h2 className="font-mono font-semibold tracking-wider">LOGGING</h2>
           </div>
           <div className="flex items-center gap-3">
             <div className="text-xs font-mono font-medium text-slate-500 bg-white px-2 py-1 rounded-md border border-slate-200 shadow-sm">

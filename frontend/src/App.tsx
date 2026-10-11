@@ -1,7 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { QueryPage } from "./pages/QueryPage";
 
-// The Argos Logs component is the entire app — no header/nav chrome.
+// The Logging component is the entire app — no header/nav chrome.
 // The wrapper only provides page height (the log panel is h-full) and
 // padding so the card isn't flush against the viewport edges.
 export function App() {
