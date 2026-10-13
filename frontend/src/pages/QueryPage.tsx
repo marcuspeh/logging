@@ -131,7 +131,7 @@ function syntheticPayload(row: LogRow): string {
 }
 
 // QueryPage is the single page of the app. It mirrors the prototype's
-// "Logging" module: top filter bar with service / Log ID / Level /
+// "Logging" module: top filter bar with sirvice / Log ID / Level /
 // Time-range, then a virtualized-free list of expandable log rows
 // showing metadata + a JSON payload panel when expanded.
 //
@@ -143,12 +143,12 @@ function syntheticPayload(row: LogRow): string {
 //     + time range). We pass those to the backend.
 //   * The level filter is applied client-side on top of the result so
 //     it doesn't force a refetch when toggled.
-//   * The service dropdown's "free text" matches the backend's `project`
+//   * The project dropdown's "free text" matches the backend's `project`
 //     field; suggestions come from the /projects endpoint.
 export function QueryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const psmFilter = searchParams.get("psm") ?? "";
+  const projectFilter = searchParams.get("project") ?? "";
   const levelFilter = searchParams.get("level") ?? "";
   const logIdFilter = searchParams.get("logId") ?? "";
   const fromFilter = searchParams.get("from") ?? "";
@@ -184,12 +184,12 @@ export function QueryPage() {
   } = useSearch();
 
   // Sync URL-driven filters into useSearch's params. URL is the source
-  // of truth — both `psm` and `project` keys map to the backend's
+  // of truth — the `project` key maps directly to the backend's
   // `project` field, and the preset URL key (`time`) is translated to
   // ISO `from`/`to` before being passed to the hook.
   useEffect(() => {
     apply({
-      project: psmFilter || undefined,
+      project: projectFilter || undefined,
       logid: logIdFilter || undefined,
       level: (levelFilter as Level) || undefined,
       from: fromFilter || undefined,
@@ -197,9 +197,9 @@ export function QueryPage() {
     });
     // apply is a stable callback from the hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [psmFilter, levelFilter, logIdFilter, fromFilter, toFilter]);
+  }, [projectFilter, levelFilter, logIdFilter, fromFilter, toFilter]);
 
-  // Service suggestions come from the backend's /projects endpoint.
+  // Project suggestions come from the backend's /projects endpoint.
   const projectsQuery = useProjects();
   const projectOptions = projectsQuery.data ?? [];
 
@@ -249,30 +249,30 @@ export function QueryPage() {
     }, 100);
   }, [expandedId]);
 
-  const [psmOpen, setPsmOpen] = useState(false);
-  // Track the service blur timer so we can cancel it on unmount / re-focus
+  const [projectOpen, setProjectOpen] = useState(false);
+  // Track the project blur timer so we can cancel it on unmount / re-focus
   // and avoid setState on an unmounted component.
-  const psmBlurTimer = useRef<number | null>(null);
+  const projectBlurTimer = useRef<number | null>(null);
   useEffect(() => {
     return () => {
-      if (psmBlurTimer.current !== null) {
-        window.clearTimeout(psmBlurTimer.current);
+      if (projectBlurTimer.current !== null) {
+        window.clearTimeout(projectBlurTimer.current);
       }
     };
   }, []);
-  const schedulePsmClose = () => {
-    if (psmBlurTimer.current !== null) {
-      window.clearTimeout(psmBlurTimer.current);
+  const scheduleProjectClose = () => {
+    if (projectBlurTimer.current !== null) {
+      window.clearTimeout(projectBlurTimer.current);
     }
-    psmBlurTimer.current = window.setTimeout(() => {
-      setPsmOpen(false);
-      psmBlurTimer.current = null;
+    projectBlurTimer.current = window.setTimeout(() => {
+      setProjectOpen(false);
+      projectBlurTimer.current = null;
     }, 200);
   };
-  const cancelPsmClose = () => {
-    if (psmBlurTimer.current !== null) {
-      window.clearTimeout(psmBlurTimer.current);
-      psmBlurTimer.current = null;
+  const cancelProjectClose = () => {
+    if (projectBlurTimer.current !== null) {
+      window.clearTimeout(projectBlurTimer.current);
+      projectBlurTimer.current = null;
     }
   };
 
@@ -333,59 +333,59 @@ export function QueryPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          {/* Service (formerly PSM) with suggestions */}
+          {/* Project filter with suggestions */}
           <div className="relative">
             <Input
               icon={<Terminal className="w-4 h-4" />}
-              placeholder="Search or type service..."
-              value={psmFilter === "all" ? "" : psmFilter}
-              onChange={(e) => updateParams("psm", e.target.value)}
+              placeholder="Search or type project..."
+              value={projectFilter === "all" ? "" : projectFilter}
+              onChange={(e) => updateParams("project", e.target.value)}
               onFocus={() => {
-                cancelPsmClose();
-                setPsmOpen(true);
+                cancelProjectClose();
+                setProjectOpen(true);
               }}
-              onBlur={schedulePsmClose}
+              onBlur={scheduleProjectClose}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  cancelPsmClose();
-                  setPsmOpen(false);
+                  cancelProjectClose();
+                  setProjectOpen(false);
                 }
               }}
               showClear
               onClear={() => {
-                cancelPsmClose();
-                setPsmOpen(false);
-                updateParams("psm", "");
+                cancelProjectClose();
+                setProjectOpen(false);
+                updateParams("project", "");
               }}
               className="font-mono text-sm"
             />
-            {psmOpen ? (
+            {projectOpen ? (
               <div className="absolute top-full left-0 w-full mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-20 font-mono text-sm ring-1 ring-slate-900/5">
-                {!psmFilter && projectOptions.length > 0 ? (
+                {!projectFilter && projectOptions.length > 0 ? (
                   <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-400 bg-slate-50 border-b border-slate-100 font-bold sticky top-0">
-                    Suggested services
+                    Suggested projects
                   </div>
                 ) : null}
                 {projectOptions
-                  .filter((p) => !psmFilter || p.toLowerCase().includes(psmFilter.toLowerCase()))
+                  .filter((p) => !projectFilter || p.toLowerCase().includes(projectFilter.toLowerCase()))
                   .map((p) => (
                     <div
                       key={p}
                       className="px-3 py-2 cursor-pointer hover:bg-blue-50 hover:text-blue-700 text-slate-700 transition-colors"
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        updateParams("psm", p);
-                        cancelPsmClose();
-                        setPsmOpen(false);
+                        updateParams("project", p);
+                        cancelProjectClose();
+                        setProjectOpen(false);
                       }}
                     >
                       {p}
                     </div>
                   ))}
-                {psmFilter &&
-                !projectOptions.some((p) => p.toLowerCase() === psmFilter.toLowerCase()) ? (
+                {projectFilter &&
+                !projectOptions.some((p) => p.toLowerCase() === projectFilter.toLowerCase()) ? (
                   <div className="px-3 py-2 text-slate-500 text-xs italic bg-slate-50 border-t border-slate-100">
-                    Press Enter to use "{psmFilter}"
+                    Press Enter to use "{projectFilter}"
                   </div>
                 ) : null}
               </div>
@@ -459,7 +459,7 @@ export function QueryPage() {
           <div className="py-24 text-center text-slate-500 font-sans flex flex-col items-center justify-center">
             <Terminal className="w-12 h-12 mb-4 text-slate-300" />
             <p className="text-lg font-medium text-slate-700">No filters set</p>
-            <p className="text-sm mt-1">Type a service or Log ID to start.</p>
+            <p className="text-sm mt-1">Type a project or Log ID to start.</p>
           </div>
         ) : filteredRows.length > 0 ? (
           <div className="min-w-[800px] flex flex-col font-mono text-sm divide-y divide-slate-100 pb-8">
@@ -496,10 +496,10 @@ export function QueryPage() {
                         <span
                           onClick={(e) => {
                             e.stopPropagation();
-                            updateParams("psm", row.project);
+                            updateParams("project", row.project);
                           }}
                           className="font-semibold text-blue-600 flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 cursor-pointer transition-colors px-2 py-0.5 rounded border border-blue-100"
-                          title="Filter by this service"
+                          title="Filter by this project"
                         >
                           <Terminal className="w-3 h-3" /> {row.project}
                         </span>
