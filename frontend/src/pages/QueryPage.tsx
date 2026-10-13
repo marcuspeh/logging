@@ -61,9 +61,11 @@ function windowFromPreset(preset: string): { from?: string; to?: string } {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-// Composite row key: logid is not unique across rows (one logid can
+// Composite row identity: logid is not unique across rows (one logid can
 // span many timestamps/messages). Includes index as a final tiebreaker
-// so React keys stay stable within a single rendered slice.
+// so keys stay stable within a single rendered slice. Used both as the
+// React key and as the expandedId value, so expanding one row never
+// toggles its siblings that share a logid.
 function rowKey(r: LogRow, index: number): string {
   return `${r.timestamp}|${r.project}|${r.logid}|${index}`;
 }
@@ -462,19 +464,22 @@ export function QueryPage() {
         ) : filteredRows.length > 0 ? (
           <div className="min-w-[800px] flex flex-col font-mono text-sm divide-y divide-slate-100 pb-8">
             {displayedRows.map((row, index) => {
-              const isExpanded = expandedId === row.logid;
+              // Expand by composite key, not bare logid: one logid can
+              // span many rows, so a logid-keyed toggle expands all of them.
+              const rowId = rowKey(row, index);
+              const isExpanded = expandedId === rowId;
               const timeStr = shortTime(row.timestamp);
               const detailsJson = syntheticPayload(row);
               return (
                 <div
-                  key={rowKey(row, index)}
-                  id={`log-${row.logid}`}
+                  key={rowId}
+                  id={`log-${rowId}`}
                   className={cn(
                     "group flex flex-col hover:bg-slate-50 transition-colors cursor-pointer py-3 px-4",
                     isExpanded ? "bg-slate-50" : "",
                   )}
                   onClick={() =>
-                    updateParams("expandedId", isExpanded ? "" : row.logid)
+                    updateParams("expandedId", isExpanded ? "" : rowId)
                   }
                 >
                   {/* Header row */}
