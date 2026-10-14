@@ -47,11 +47,15 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_HEAP_OPTS: "-Xmx256M -Xms256M"
+      KAFKA_NUM_PARTITIONS: "1"
     healthcheck:
+      # Launches a full JVM per run, so keep this infrequent.
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     volumes:
       - /mnt/data/logging/kafka:/var/lib/kafka/data
 
