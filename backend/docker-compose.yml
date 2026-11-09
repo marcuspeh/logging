@@ -30,6 +30,7 @@ services:
       - logging-net
       - spending-tracker-net
       - algo01-net
+      - algo02-net
     ports:
       - "9092:9092"
     environment:
@@ -96,4 +97,6 @@ networks:
   spending-tracker-net:
     external: true
   algo01-net:
+    external: true
+  algo02-net:
     external: true
